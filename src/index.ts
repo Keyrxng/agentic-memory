@@ -25,6 +25,7 @@ export { DualGraphExtractor } from './extraction/dual-graph-extractor.js';
 
 // Temporal management
 export { TemporalGraph } from './temporal/temporal-graph.js';
+export { DualGraphTemporalManager } from './temporal/dual-graph-temporal-manager.js';
 
 // Main agent memory integration
 export { AgentGraphMemory } from './agent/memory.js';

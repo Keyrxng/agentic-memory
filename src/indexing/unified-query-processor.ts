@@ -434,18 +434,81 @@ export class UnifiedQueryProcessor {
     lexicalResults: DualGraphQueryResult['lexicalResults'],
     domainResults: DualGraphQueryResult['domainResults']
   ): void {
-    // This would integrate with memory manager to boost recently accessed items
-    // For now, we'll use timestamps from the data itself
+    // Integrate with memory manager to boost recently accessed items
+    const memoryStats = this.indexManager.getMemoryStats();
+    const recentlyAccessed = new Set(memoryStats.recentlyAccessed || []);
+    const accessFrequency = memoryStats.accessFrequency || new Map();
 
-    // Sort lexical chunks by creation time (most recent first)
-    lexicalResults.chunks.sort((a, b) =>
-      new Date(b.metadata.timestamp).getTime() - new Date(a.metadata.timestamp).getTime()
-    );
+    // Sort lexical chunks by multiple factors: access frequency, recency, and creation time
+    lexicalResults.chunks.sort((a, b) => {
+      const aFreq = accessFrequency.get(a.id) || 0;
+      const bFreq = accessFrequency.get(b.id) || 0;
+      const aRecent = recentlyAccessed.has(a.id) ? 1 : 0;
+      const bRecent = recentlyAccessed.has(b.id) ? 1 : 0;
+      const aTime = new Date(a.metadata.timestamp).getTime();
+      const bTime = new Date(b.metadata.timestamp).getTime();
 
-    // Boost relevance scores for recent items
+      // Weighted scoring: 40% recent access, 30% frequency, 30% timestamp
+      const aScore = (aRecent * 0.4) + (aFreq * 0.3) + (aTime * 0.3);
+      const bScore = (bRecent * 0.4) + (bFreq * 0.3) + (bTime * 0.3);
+      
+      return bScore - aScore;
+    });
+
+    // Sort domain entities using similar logic
+    domainResults.entities.sort((a, b) => {
+      const aFreq = accessFrequency.get(a.id) || 0;
+      const bFreq = accessFrequency.get(b.id) || 0;
+      const aRecent = recentlyAccessed.has(a.id) ? 1 : 0;
+      const bRecent = recentlyAccessed.has(b.id) ? 1 : 0;
+
+      // For entities, prioritize access patterns over timestamps
+      const aScore = (aRecent * 0.6) + (aFreq * 0.4);
+      const bScore = (bRecent * 0.6) + (bFreq * 0.4);
+      
+      return bScore - aScore;
+    });
+
+    // Boost relevance scores for recently accessed items
     for (const chunk of lexicalResults.chunks.slice(0, 10)) {
       const currentScore = lexicalResults.relevanceScores.get(chunk.id) || 0;
-      lexicalResults.relevanceScores.set(chunk.id, Math.min(1.0, currentScore * 1.2));
+      let boost = 1.0;
+      
+      if (recentlyAccessed.has(chunk.id)) {
+        boost += 0.3; // 30% boost for recently accessed
+      }
+      
+      const frequency = accessFrequency.get(chunk.id) || 0;
+      if (frequency > 5) {
+        boost += Math.min(0.2, frequency / 50); // Up to 20% boost for frequent access
+      }
+      
+      lexicalResults.relevanceScores.set(chunk.id, Math.min(1.0, currentScore * boost));
+    }
+
+    // Apply similar boost to domain entities
+    for (const entity of domainResults.entities.slice(0, 10)) {
+      const currentScore = domainResults.relevanceScores.get(entity.id) || 0;
+      let boost = 1.0;
+      
+      if (recentlyAccessed.has(entity.id)) {
+        boost += 0.3;
+      }
+      
+      const frequency = accessFrequency.get(entity.id) || 0;
+      if (frequency > 3) {
+        boost += Math.min(0.25, frequency / 40); // Up to 25% boost for entities
+      }
+      
+      domainResults.relevanceScores.set(entity.id, Math.min(1.0, currentScore * boost));
+    }
+
+    // Mark these items as accessed for future prioritization
+    for (const chunk of lexicalResults.chunks.slice(0, 5)) {
+      this.indexManager.markAccessed(chunk.id);
+    }
+    for (const entity of domainResults.entities.slice(0, 5)) {
+      this.indexManager.markAccessed(entity.id);
     }
   }
 
@@ -455,21 +518,191 @@ export class UnifiedQueryProcessor {
   private enhanceWithClusters(
     domainResults: DualGraphQueryResult['domainResults']
   ): void {
-    // This would integrate cluster information from the index manager
-    // For now, we'll add cluster metadata to entities that belong to clusters
-
+    // Integrate cluster information from the index manager
     const clusteringStats = this.indexManager.getClusteringStats();
+    const clusters = this.indexManager.getClusters();
 
-    // Add cluster information to entity properties
+    if (clusters.length === 0) {
+      return; // No clusters to process
+    }
+
+    // Create cluster lookup maps for efficient searching
+    const entityToCluster = new Map<string, string>();
+    const clusterDetails = new Map<string, any>();
+
+    for (const cluster of clusters) {
+      clusterDetails.set(cluster.id, {
+        id: cluster.id,
+        centroid: cluster.centroid,
+        size: cluster.entityIds.length,
+        confidence: cluster.confidence,
+        theme: cluster.theme,
+        lastUpdated: cluster.lastUpdated
+      });
+
+      // Map each entity to its cluster
+      for (const entityId of cluster.entityIds) {
+        entityToCluster.set(entityId, cluster.id);
+      }
+    }
+
+    // Enhance entities with their cluster information
     for (const entity of domainResults.entities) {
-      if (clusteringStats.totalClusters > 0) {
-        entity.properties.clusterInfo = {
-          totalClusters: clusteringStats.totalClusters,
-          averageClusterSize: clusteringStats.averageClusterSize,
-          largestCluster: clusteringStats.largestCluster
+      const clusterId = entityToCluster.get(entity.id);
+      
+      if (clusterId) {
+        const cluster = clusterDetails.get(clusterId);
+        if (cluster) {
+          // Add detailed cluster information to entity
+          entity.properties.cluster = {
+            id: clusterId,
+            theme: cluster.theme,
+            size: cluster.size,
+            confidence: cluster.confidence,
+            isRepresentative: this.isEntityRepresentativeOfCluster(entity, cluster),
+            relatedEntities: this.findRelatedEntitiesInCluster(entity.id, clusterId, clusters),
+            centrality: this.calculateEntityCentrality(entity.id, cluster)
+          };
+
+          // Boost relevance score for entities in well-formed clusters
+          const currentScore = domainResults.relevanceScores.get(entity.id) || 0;
+          const clusterBoost = this.calculateClusterBoost(cluster);
+          domainResults.relevanceScores.set(entity.id, Math.min(1.0, currentScore * clusterBoost));
+        }
+      } else {
+        // Entity is not in any cluster - mark as isolated
+        entity.properties.cluster = {
+          id: null,
+          theme: 'isolated',
+          size: 1,
+          confidence: 0,
+          isRepresentative: true,
+          relatedEntities: [],
+          centrality: 0
         };
       }
     }
+
+    // Add cluster-wide statistics to domain results
+    (domainResults as any).clusterInfo = {
+      totalClusters: clusteringStats.totalClusters,
+      averageClusterSize: clusteringStats.averageClusterSize,
+      largestCluster: clusteringStats.largestCluster,
+      clusterDistribution: this.getClusterDistribution(clusters),
+      queryClusterCoverage: this.calculateQueryClusterCoverage(domainResults.entities, entityToCluster)
+    };
+
+    // Sort entities to prioritize those in high-quality clusters
+    domainResults.entities.sort((a, b) => {
+      const aClusterConf = a.properties.cluster?.confidence || 0;
+      const bClusterConf = b.properties.cluster?.confidence || 0;
+      const aScore = domainResults.relevanceScores.get(a.id) || 0;
+      const bScore = domainResults.relevanceScores.get(b.id) || 0;
+      
+      // Primary sort by relevance, secondary by cluster confidence
+      const aTotalScore = aScore + (aClusterConf * 0.1);
+      const bTotalScore = bScore + (bClusterConf * 0.1);
+      
+      return bTotalScore - aTotalScore;
+    });
+  }
+
+  /**
+   * Determine if an entity is representative of its cluster
+   */
+  private isEntityRepresentativeOfCluster(entity: EntityRecord, cluster: any): boolean {
+    // Check if entity type matches cluster theme
+    if (cluster.theme && entity.type === cluster.theme) {
+      return true;
+    }
+
+    // Check if entity has high centrality in cluster
+    const centrality = this.calculateEntityCentrality(entity.id, cluster);
+    return centrality > 0.7; // Threshold for being representative
+  }
+
+  /**
+   * Find related entities in the same cluster
+   */
+  private findRelatedEntitiesInCluster(entityId: string, clusterId: string, clusters: any[]): string[] {
+    const cluster = clusters.find(c => c.id === clusterId);
+    if (!cluster) return [];
+
+    return cluster.entityIds
+      .filter((id: string) => id !== entityId)
+      .slice(0, 5); // Return up to 5 related entities
+  }
+
+  /**
+   * Calculate entity centrality within its cluster
+   */
+  private calculateEntityCentrality(entityId: string, cluster: any): number {
+    if (!cluster.centroid || cluster.size <= 1) {
+      return 1.0; // Single entity clusters have max centrality
+    }
+
+    // Simple centrality based on distance from cluster centroid
+    // In a real implementation, this would use proper graph centrality measures
+    const normalizedPosition = 1.0 / cluster.size;
+    return Math.min(1.0, normalizedPosition * 2); // Normalize to 0-1 range
+  }
+
+  /**
+   * Calculate boost factor based on cluster quality
+   */
+  private calculateClusterBoost(cluster: any): number {
+    let boost = 1.0;
+
+    // Boost for well-formed clusters
+    if (cluster.confidence > 0.8) {
+      boost += 0.2;
+    } else if (cluster.confidence > 0.6) {
+      boost += 0.1;
+    }
+
+    // Boost for appropriately sized clusters
+    if (cluster.size >= 3 && cluster.size <= 10) {
+      boost += 0.1;
+    }
+
+    // Boost for recent clusters
+    if (cluster.lastUpdated && (Date.now() - new Date(cluster.lastUpdated).getTime()) < 24 * 60 * 60 * 1000) {
+      boost += 0.05;
+    }
+
+    return boost;
+  }
+
+  /**
+   * Get distribution of cluster sizes
+   */
+  private getClusterDistribution(clusters: any[]): Record<string, number> {
+    const distribution: Record<string, number> = {
+      small: 0,    // 2-3 entities
+      medium: 0,   // 4-7 entities  
+      large: 0,    // 8+ entities
+      singleton: 0 // 1 entity
+    };
+
+    for (const cluster of clusters) {
+      const size = cluster.entityIds.length;
+      if (size === 1) distribution.singleton++;
+      else if (size <= 3) distribution.small++;
+      else if (size <= 7) distribution.medium++;
+      else distribution.large++;
+    }
+
+    return distribution;
+  }
+
+  /**
+   * Calculate what percentage of query results are covered by clusters
+   */
+  private calculateQueryClusterCoverage(entities: EntityRecord[], entityToCluster: Map<string, string>): number {
+    if (entities.length === 0) return 0;
+
+    const clusteredEntities = entities.filter(entity => entityToCluster.has(entity.id)).length;
+    return clusteredEntities / entities.length;
   }
 
   /**

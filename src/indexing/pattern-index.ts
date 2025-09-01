@@ -62,6 +62,159 @@ export interface PatternMatch {
   };
 }
 
+/**
+ * State for VF2 algorithm implementation
+ */
+class MatchingState {
+  private pattern1: GraphPattern;
+  private pattern2: GraphPattern;
+  private mapping: Map<string, string> = new Map(); // pattern1 node -> pattern2 node
+  private reverseMapping: Map<string, string> = new Map(); // pattern2 node -> pattern1 node
+  private inNeighbors1: Set<string> = new Set();
+  private inNeighbors2: Set<string> = new Set();
+  private outNeighbors1: Set<string> = new Set();
+  private outNeighbors2: Set<string> = new Set();
+
+  constructor(pattern1: GraphPattern, pattern2: GraphPattern) {
+    this.pattern1 = pattern1;
+    this.pattern2 = pattern2;
+  }
+
+  isComplete(): boolean {
+    return this.mapping.size === Object.keys(this.pattern1.nodes).length;
+  }
+
+  getCandidatePairs(): Array<[string, string]> {
+    const candidates: Array<[string, string]> = [];
+
+    // Get unmapped nodes from both patterns
+    const unmapped1 = Object.keys(this.pattern1.nodes).filter(n => !this.mapping.has(n));
+    const unmapped2 = Object.keys(this.pattern2.nodes).filter(n => !this.reverseMapping.has(n));
+
+    // Prioritize nodes that are neighbors of already mapped nodes
+    for (const node1 of unmapped1) {
+      for (const node2 of unmapped2) {
+        if (this.areNodesCompatible(node1, node2)) {
+          candidates.push([node1, node2]);
+        }
+      }
+    }
+
+    return candidates;
+  }
+
+  isConsistent(node1: string, node2: string): boolean {
+    // Check node compatibility
+    if (!this.areNodesCompatible(node1, node2)) {
+      return false;
+    }
+
+    // Check edge consistency
+    return this.checkEdgeConsistency(node1, node2);
+  }
+
+  addMapping(node1: string, node2: string): void {
+    this.mapping.set(node1, node2);
+    this.reverseMapping.set(node2, node1);
+    this.updateNeighborSets(node1, node2);
+  }
+
+  removeMapping(node1: string, node2: string): void {
+    this.mapping.delete(node1);
+    this.reverseMapping.delete(node2);
+    this.rebuildNeighborSets();
+  }
+
+  private areNodesCompatible(node1: string, node2: string): boolean {
+    const nodeData1 = this.pattern1.nodes[node1];
+    const nodeData2 = this.pattern2.nodes[node2];
+
+    if (!nodeData1 || !nodeData2) return false;
+
+    // Check type compatibility
+    if (nodeData1.type && nodeData2.type && nodeData1.type !== nodeData2.type) {
+      return false;
+    }
+
+    // Check property compatibility
+    if (nodeData1.properties && nodeData2.properties) {
+      for (const [key, value] of Object.entries(nodeData1.properties)) {
+        if (nodeData2.properties[key] !== value) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  private checkEdgeConsistency(node1: string, node2: string): boolean {
+    // For each edge in pattern1 involving node1, check if there's a corresponding edge in pattern2
+    for (const edge1 of this.pattern1.edges) {
+      if (edge1.from === node1 || edge1.to === node1) {
+        const otherNode1 = edge1.from === node1 ? edge1.to : edge1.from;
+        const otherNode2 = this.mapping.get(otherNode1);
+
+        if (otherNode2) {
+          // Check if corresponding edge exists in pattern2
+          const hasCorrespondingEdge = this.pattern2.edges.some(edge2 => {
+            const matches = (edge2.from === node2 && edge2.to === otherNode2) ||
+              (edge2.to === node2 && edge2.from === otherNode2);
+
+            if (!matches) return false;
+
+            // Check edge type and direction compatibility
+            if (edge1.type && edge2.type && edge1.type !== edge2.type) return false;
+            if (edge1.direction !== edge2.direction) return false;
+
+            return true;
+          });
+
+          if (!hasCorrespondingEdge) {
+            return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  }
+
+  private updateNeighborSets(node1: string, node2: string): void {
+    // Update neighbor sets based on the new mapping
+    this.rebuildNeighborSets();
+  }
+
+  private rebuildNeighborSets(): void {
+    this.inNeighbors1.clear();
+    this.inNeighbors2.clear();
+    this.outNeighbors1.clear();
+    this.outNeighbors2.clear();
+
+    // Rebuild neighbor sets based on current mappings
+    for (const [mapped1, mapped2] of this.mapping) {
+      // Add neighbors of mapped nodes to the respective sets
+      for (const edge of this.pattern1.edges) {
+        if (edge.from === mapped1 && !this.mapping.has(edge.to)) {
+          this.outNeighbors1.add(edge.to);
+        }
+        if (edge.to === mapped1 && !this.mapping.has(edge.from)) {
+          this.inNeighbors1.add(edge.from);
+        }
+      }
+
+      for (const edge of this.pattern2.edges) {
+        if (edge.from === mapped2 && !this.reverseMapping.has(edge.to)) {
+          this.outNeighbors2.add(edge.to);
+        }
+        if (edge.to === mapped2 && !this.reverseMapping.has(edge.from)) {
+          this.inNeighbors2.add(edge.from);
+        }
+      }
+    }
+  }
+}
+
 export class PatternIndex implements GraphIndex {
   public readonly name = 'pattern_index';
   public readonly type = 'structure' as const;
@@ -136,9 +289,8 @@ export class PatternIndex implements GraphIndex {
   query(pattern: GraphPattern, options: QueryOptions = {}): Set<string> {
     this.queryCount++;
 
-    // For pattern matching, we return pattern IDs that match
-    // In a real implementation, this would perform subgraph isomorphism
-    const matches = this.findMatchingPatterns(pattern);
+    // Perform actual subgraph isomorphism matching
+    const matches = this.performSubgraphIsomorphism(pattern, options);
 
     if (matches.size > 0) {
       this.hitCount++;
@@ -165,7 +317,7 @@ export class PatternIndex implements GraphIndex {
     this.hitCount = 0;
   }
 
-  async rebuild(items: Array<{id: string, data: any}>): Promise<void> {
+  async rebuild(items: Array<{ id: string, data: any }>): Promise<void> {
     this.clear();
 
     // Rebuild from graph data
@@ -175,6 +327,73 @@ export class PatternIndex implements GraphIndex {
         this.add(item.data.pattern, item.id);
       }
     }
+  }
+
+  /**
+   * Perform subgraph isomorphism using VF2-inspired algorithm
+   */
+  private performSubgraphIsomorphism(queryPattern: GraphPattern, options: QueryOptions): Set<string> {
+    const resultPatternIds = new Set<string>();
+
+    // Get candidate patterns using the existing heuristics
+    const candidatePatternIds = this.findMatchingPatterns(queryPattern);
+
+    // For each candidate pattern, perform actual isomorphism checking
+    for (const patternId of candidatePatternIds) {
+      const storedPattern = this.patterns.get(patternId);
+      if (!storedPattern) continue;
+
+      // Check if queryPattern is isomorphic to storedPattern
+      if (this.arePatternIsomorphic(queryPattern, storedPattern)) {
+        resultPatternIds.add(patternId);
+      }
+    }
+
+    return resultPatternIds;
+  }
+
+  /**
+   * Check if two patterns are isomorphic using VF2 algorithm
+   */
+  private arePatternIsomorphic(pattern1: GraphPattern, pattern2: GraphPattern): boolean {
+    // Quick structural checks first
+    if (Object.keys(pattern1.nodes).length !== Object.keys(pattern2.nodes).length ||
+      pattern1.edges.length !== pattern2.edges.length) {
+      return false;
+    }
+
+    // Use VF2-inspired matching algorithm
+    const state = new MatchingState(pattern1, pattern2);
+    return this.vf2Match(state);
+  }
+
+  /**
+   * VF2 algorithm implementation for subgraph isomorphism
+   */
+  private vf2Match(state: MatchingState): boolean {
+    // Base case: all nodes are matched
+    if (state.isComplete()) {
+      return true;
+    }
+
+    // Get next candidate pair
+    const candidates = state.getCandidatePairs();
+
+    for (const [node1, node2] of candidates) {
+      if (state.isConsistent(node1, node2)) {
+        // Try this mapping
+        state.addMapping(node1, node2);
+
+        if (this.vf2Match(state)) {
+          return true;
+        }
+
+        // Backtrack
+        state.removeMapping(node1, node2);
+      }
+    }
+
+    return false;
   }
 
   /**

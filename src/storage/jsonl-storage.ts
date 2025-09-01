@@ -920,9 +920,133 @@ export class JSONLGraphStorage implements GraphStorage {
     offset?: number;
     since?: Date;
   } = {}): Promise<{ graphs: LexicalGraph[]; hasMore: boolean }> {
-    // Implementation would scan for lexical graph files and load them
-    // For now, return empty result
-    return { graphs: [], hasMore: false };
+    try {
+      const lexicalGraphsPath = join(this.config.directory, 'lexical_graphs');
+      
+      // Check if directory exists
+      try {
+        await fs.access(lexicalGraphsPath);
+      } catch {
+        // Directory doesn't exist, return empty result
+        return { graphs: [], hasMore: false };
+      }
+
+      // Read all lexical graph files
+      const files = await fs.readdir(lexicalGraphsPath);
+      const jsonlFiles = files.filter(file => file.endsWith('.jsonl') || file.endsWith('.jsonl.gz') || file.endsWith('.jsonl.br'));
+      
+      if (jsonlFiles.length === 0) {
+        return { graphs: [], hasMore: false };
+      }
+
+      const graphs: LexicalGraph[] = [];
+      let processedCount = 0;
+      const limit = options.limit || 1000;
+      const offset = options.offset || 0;
+
+      // Sort files by modification time (newest first)
+      const fileStats = await Promise.all(
+        jsonlFiles.map(async file => {
+          const filePath = join(lexicalGraphsPath, file);
+          const stats = await fs.stat(filePath);
+          return { file, stats, path: filePath };
+        })
+      );
+      
+      fileStats.sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
+
+      // Process files
+      for (const { file, stats, path } of fileStats) {
+        // Apply date filter if specified
+        if (options.since && stats.mtime < options.since) {
+          continue;
+        }
+
+        // Skip files until we reach the offset
+        if (processedCount < offset) {
+          processedCount++;
+          continue;
+        }
+
+        // Stop if we've reached the limit
+        if (graphs.length >= limit) {
+          return { graphs, hasMore: true };
+        }
+
+        try {
+          const content = await fs.readFile(path, 'utf-8');
+          const lines = content.split('\n').filter(line => line.trim());
+
+          for (const line of lines) {
+            try {
+              const lexicalGraph = JSON.parse(line) as LexicalGraph;
+              
+              // Reconstruct Map objects from serialized format
+              lexicalGraph.textChunks = new Map(Object.entries(lexicalGraph.textChunks || {}));
+              lexicalGraph.lexicalRelations = new Map(Object.entries(lexicalGraph.lexicalRelations || {}));
+              lexicalGraph.embeddings = new Map();
+              
+              // Reconstruct embeddings
+              if ((lexicalGraph as any).embeddingsData) {
+                for (const [key, value] of Object.entries((lexicalGraph as any).embeddingsData)) {
+                  lexicalGraph.embeddings.set(key, new Float32Array(value as number[]));
+                }
+              }
+
+              // Reconstruct retrieval indices
+              if (lexicalGraph.retrievalIndices) {
+                lexicalGraph.retrievalIndices.textIndex = new Map(Object.entries(lexicalGraph.retrievalIndices.textIndex || {}));
+                lexicalGraph.retrievalIndices.vectorIndex = new Map();
+                lexicalGraph.retrievalIndices.chunkTypeIndex = new Map(Object.entries(lexicalGraph.retrievalIndices.chunkTypeIndex || {}));
+                
+                // Reconstruct vector index
+                if ((lexicalGraph.retrievalIndices as any).vectorIndexData) {
+                  for (const [key, value] of Object.entries((lexicalGraph.retrievalIndices as any).vectorIndexData)) {
+                    lexicalGraph.retrievalIndices.vectorIndex.set(key, new Float32Array(value as number[]));
+                  }
+                }
+                
+                // Convert Set data back to Sets
+                for (const [key, value] of lexicalGraph.retrievalIndices.textIndex) {
+                  lexicalGraph.retrievalIndices.textIndex.set(key, new Set(Array.isArray(value) ? value : []));
+                }
+                
+                for (const [key, value] of lexicalGraph.retrievalIndices.chunkTypeIndex) {
+                  lexicalGraph.retrievalIndices.chunkTypeIndex.set(key, new Set(Array.isArray(value) ? value : []));
+                }
+              }
+
+              // Convert date strings back to Date objects
+              lexicalGraph.createdAt = new Date(lexicalGraph.createdAt);
+              lexicalGraph.updatedAt = new Date(lexicalGraph.updatedAt);
+
+              graphs.push(lexicalGraph);
+
+              if (graphs.length >= limit) {
+                return { graphs, hasMore: true };
+              }
+            } catch (parseError) {
+              console.warn(`Failed to parse lexical graph line in ${file}:`, parseError);
+              continue;
+            }
+          }
+        } catch (fileError) {
+          console.warn(`Failed to read lexical graph file ${file}:`, fileError);
+          continue;
+        }
+
+        processedCount++;
+      }
+
+      // Check if there are more files to process
+      const hasMore = processedCount < fileStats.length;
+
+      return { graphs, hasMore };
+
+    } catch (error) {
+      console.error('Failed to load lexical graphs:', error);
+      return { graphs: [], hasMore: false };
+    }
   }
 
   /**
@@ -933,9 +1057,153 @@ export class JSONLGraphStorage implements GraphStorage {
     offset?: number;
     since?: Date;
   } = {}): Promise<{ graphs: DomainGraph[]; hasMore: boolean }> {
-    // Implementation would scan for domain graph files and load them
-    // For now, return empty result
-    return { graphs: [], hasMore: false };
+    try {
+      const domainGraphsPath = join(this.config.directory, 'domain_graphs');
+      
+      // Check if directory exists
+      try {
+        await fs.access(domainGraphsPath);
+      } catch {
+        // Directory doesn't exist, return empty result
+        return { graphs: [], hasMore: false };
+      }
+
+      // Read all domain graph files
+      const files = await fs.readdir(domainGraphsPath);
+      const jsonlFiles = files.filter(file => file.endsWith('.jsonl') || file.endsWith('.jsonl.gz') || file.endsWith('.jsonl.br'));
+      
+      if (jsonlFiles.length === 0) {
+        return { graphs: [], hasMore: false };
+      }
+
+      const graphs: DomainGraph[] = [];
+      let processedCount = 0;
+      const limit = options.limit || 1000;
+      const offset = options.offset || 0;
+
+      // Sort files by modification time (newest first)
+      const fileStats = await Promise.all(
+        jsonlFiles.map(async file => {
+          const filePath = join(domainGraphsPath, file);
+          const stats = await fs.stat(filePath);
+          return { file, stats, path: filePath };
+        })
+      );
+      
+      fileStats.sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
+
+      // Process files
+      for (const { file, stats, path } of fileStats) {
+        // Apply date filter if specified
+        if (options.since && stats.mtime < options.since) {
+          continue;
+        }
+
+        // Skip files until we reach the offset
+        if (processedCount < offset) {
+          processedCount++;
+          continue;
+        }
+
+        // Stop if we've reached the limit
+        if (graphs.length >= limit) {
+          return { graphs, hasMore: true };
+        }
+
+        try {
+          const content = await fs.readFile(path, 'utf-8');
+          const lines = content.split('\n').filter(line => line.trim());
+
+          for (const line of lines) {
+            try {
+              const domainGraph = JSON.parse(line) as DomainGraph;
+              
+              // Reconstruct Map objects from serialized format
+              domainGraph.entities = new Map(Object.entries(domainGraph.entities || {}));
+              domainGraph.semanticRelations = new Map(Object.entries(domainGraph.semanticRelations || {}));
+              domainGraph.entityHierarchies = new Map(Object.entries(domainGraph.entityHierarchies || {}));
+
+              // Reconstruct domain indices
+              if (domainGraph.domainIndices) {
+                domainGraph.domainIndices.entityTypeIndex = new Map(Object.entries(domainGraph.domainIndices.entityTypeIndex || {}));
+                domainGraph.domainIndices.relationshipTypeIndex = new Map(Object.entries(domainGraph.domainIndices.relationshipTypeIndex || {}));
+                
+                // Handle confidence index separately since it uses number keys
+                const confidenceIndexData = domainGraph.domainIndices.confidenceIndex || {};
+                domainGraph.domainIndices.confidenceIndex = new Map();
+                for (const [key, value] of Object.entries(confidenceIndexData)) {
+                  const numKey = parseFloat(key);
+                  if (!isNaN(numKey)) {
+                    domainGraph.domainIndices.confidenceIndex.set(numKey, new Set(Array.isArray(value) ? value : []));
+                  }
+                }
+                
+                // Convert Set data back to Sets
+                for (const [key, value] of domainGraph.domainIndices.entityTypeIndex) {
+                  domainGraph.domainIndices.entityTypeIndex.set(key, new Set(Array.isArray(value) ? value : []));
+                }
+                
+                for (const [key, value] of domainGraph.domainIndices.relationshipTypeIndex) {
+                  domainGraph.domainIndices.relationshipTypeIndex.set(key, new Set(Array.isArray(value) ? value : []));
+                }
+              }
+
+              // Reconstruct entity hierarchy Maps
+              for (const [hierarchyId, hierarchy] of domainGraph.entityHierarchies) {
+                hierarchy.parentChild = new Map(Object.entries(hierarchy.parentChild || {}));
+                hierarchy.siblings = new Map(Object.entries(hierarchy.siblings || {}));
+                
+                // Convert arrays back to arrays (they should already be arrays)
+                for (const [key, value] of hierarchy.parentChild) {
+                  hierarchy.parentChild.set(key, Array.isArray(value) ? value : []);
+                }
+                
+                for (const [key, value] of hierarchy.siblings) {
+                  hierarchy.siblings.set(key, Array.isArray(value) ? value : []);
+                }
+              }
+
+              // Convert date strings back to Date objects
+              domainGraph.createdAt = new Date(domainGraph.createdAt);
+              domainGraph.updatedAt = new Date(domainGraph.updatedAt);
+
+              // Convert temporal fields in relationships if they exist
+              for (const [relationId, relation] of domainGraph.semanticRelations) {
+                if (relation.validFrom) {
+                  relation.validFrom = new Date(relation.validFrom);
+                }
+                if (relation.validUntil) {
+                  relation.validUntil = new Date(relation.validUntil);
+                }
+              }
+
+              graphs.push(domainGraph);
+
+              if (graphs.length >= limit) {
+                return { graphs, hasMore: true };
+              }
+            } catch (parseError) {
+              console.warn(`Failed to parse domain graph line in ${file}:`, parseError);
+              continue;
+            }
+          }
+        } catch (fileError) {
+          console.warn(`Failed to read domain graph file ${file}:`, fileError);
+          continue;
+        }
+
+        processedCount++;
+      }
+
+      // Check if there are more files to process
+      const hasMore = processedCount < fileStats.length;
+
+      return { graphs, hasMore };
+
+    } catch (error) {
+      console.error('Failed to load domain graphs:', error);
+      return { graphs: [], hasMore: false };
+    }
   }
 
   /**
@@ -946,8 +1214,109 @@ export class JSONLGraphStorage implements GraphStorage {
     offset?: number;
     since?: Date;
   } = {}): Promise<{ links: CrossGraphLink[]; hasMore: boolean }> {
-    // Implementation would scan for cross-graph link files and load them
-    // For now, return empty result
-    return { links: [], hasMore: false };
+    try {
+      const crossGraphLinksPath = join(this.config.directory, 'cross_graph_links');
+      
+      // Check if directory exists
+      try {
+        await fs.access(crossGraphLinksPath);
+      } catch {
+        // Directory doesn't exist, return empty result
+        return { links: [], hasMore: false };
+      }
+
+      // Read all cross-graph link files
+      const files = await fs.readdir(crossGraphLinksPath);
+      const jsonlFiles = files.filter(file => file.endsWith('.jsonl') || file.endsWith('.jsonl.gz') || file.endsWith('.jsonl.br'));
+      
+      if (jsonlFiles.length === 0) {
+        return { links: [], hasMore: false };
+      }
+
+      const links: CrossGraphLink[] = [];
+      let processedCount = 0;
+      const limit = options.limit || 1000;
+      const offset = options.offset || 0;
+
+      // Sort files by modification time (newest first)
+      const fileStats = await Promise.all(
+        jsonlFiles.map(async file => {
+          const filePath = join(crossGraphLinksPath, file);
+          const stats = await fs.stat(filePath);
+          return { file, stats, path: filePath };
+        })
+      );
+      
+      fileStats.sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
+
+      // Process files
+      for (const { file, stats, path } of fileStats) {
+        // Apply date filter if specified
+        if (options.since && stats.mtime < options.since) {
+          continue;
+        }
+
+        // Skip files until we reach the offset
+        if (processedCount < offset) {
+          processedCount++;
+          continue;
+        }
+
+        // Stop if we've reached the limit
+        if (links.length >= limit) {
+          return { links, hasMore: true };
+        }
+
+        try {
+          const content = await fs.readFile(path, 'utf-8');
+          const lines = content.split('\n').filter(line => line.trim());
+
+          for (const line of lines) {
+            try {
+              const crossGraphLink = JSON.parse(line) as CrossGraphLink;
+              
+              // Convert date strings back to Date objects
+              crossGraphLink.createdAt = new Date(crossGraphLink.createdAt);
+
+              // Convert temporal fields if they exist
+              if (crossGraphLink.validFrom) {
+                crossGraphLink.validFrom = new Date(crossGraphLink.validFrom);
+              }
+              if (crossGraphLink.validUntil) {
+                crossGraphLink.validUntil = new Date(crossGraphLink.validUntil);
+              }
+
+              // Ensure metadata is properly structured
+              if (!crossGraphLink.metadata) {
+                crossGraphLink.metadata = {};
+              }
+
+              links.push(crossGraphLink);
+
+              if (links.length >= limit) {
+                return { links, hasMore: true };
+              }
+            } catch (parseError) {
+              console.warn(`Failed to parse cross-graph link line in ${file}:`, parseError);
+              continue;
+            }
+          }
+        } catch (fileError) {
+          console.warn(`Failed to read cross-graph link file ${file}:`, fileError);
+          continue;
+        }
+
+        processedCount++;
+      }
+
+      // Check if there are more files to process
+      const hasMore = processedCount < fileStats.length;
+
+      return { links, hasMore };
+
+    } catch (error) {
+      console.error('Failed to load cross-graph links:', error);
+      return { links: [], hasMore: false };
+    }
   }
 }

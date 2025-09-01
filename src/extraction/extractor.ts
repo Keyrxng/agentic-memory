@@ -18,6 +18,8 @@
  */
 
 import nlp from 'compromise';
+import { generateEmbeddings } from 'local-stt-tts';
+import { VectorUtils } from '../utils/vector-utils.js';
 import type {
   EntityRecord,
   RelationshipRecord,
@@ -41,6 +43,12 @@ export interface ExtractionConfig {
   enableNER: boolean;
   /** Enable dependency parsing */
   enableDependencyParsing: boolean;
+  /** Enable semantic similarity for entity enhancement */
+  enableSemanticSimilarity: boolean;
+  /** Enable contextual entity classification */
+  enableContextualClassification: boolean;
+  /** Semantic similarity threshold for entity grouping */
+  semanticSimilarityThreshold: number;
   /** Custom entity type patterns */
   customEntityPatterns: Map<string, RegExp[]>;
 }
@@ -102,6 +110,9 @@ export class DependencyBasedExtractor {
       maxRelationshipsPerText: config.maxRelationshipsPerText ?? 100,
       enableNER: config.enableNER ?? true,
       enableDependencyParsing: config.enableDependencyParsing ?? true,
+      enableSemanticSimilarity: config.enableSemanticSimilarity ?? true,
+      enableContextualClassification: config.enableContextualClassification ?? true,
+      semanticSimilarityThreshold: config.semanticSimilarityThreshold ?? 0.8,
       customEntityPatterns: config.customEntityPatterns ?? new Map()
     };
 
@@ -148,11 +159,18 @@ export class DependencyBasedExtractor {
       methodsUsed.push('dependency_parsing');
     }
 
+    // Enhance entities with semantic similarity and contextual classification
+    let enhancedEntities = entities;
+    if (this.config.enableSemanticSimilarity || this.config.enableContextualClassification) {
+      enhancedEntities = await this.enhanceEntitiesWithSemantics(entities, cleanText, context);
+      methodsUsed.push('semantic_enhancement');
+    }
+
     // Infer relationships from dependencies and patterns
-    const relationships = await this.inferRelationships(dependencies, entities, context);
+    const relationships = await this.inferRelationships(dependencies, enhancedEntities, context);
 
     // Filter by confidence thresholds
-    const filteredEntities = entities
+    const filteredEntities = enhancedEntities
       .filter(e => e.confidence >= this.config.entityConfidenceThreshold)
       .slice(0, this.config.maxEntitiesPerText);
 
@@ -837,5 +855,223 @@ export class DependencyBasedExtractor {
 
   private generateRelationshipId(sourceId: string, targetId: string, type: string): string {
     return `${sourceId}_${type}_${targetId}`;
+  }
+
+  /**
+   * Enhance entities with semantic similarity and contextual classification
+   */
+  private async enhanceEntitiesWithSemantics(
+    entities: Array<EntityRecord & { confidence: number }>,
+    text: string,
+    context: GraphContext
+  ): Promise<Array<EntityRecord & { confidence: number }>> {
+    const enhancedEntities = [...entities];
+
+    if (this.config.enableSemanticSimilarity) {
+      // Group semantically similar entities
+      await this.groupSimilarEntities(enhancedEntities);
+    }
+
+    if (this.config.enableContextualClassification) {
+      // Improve entity type classification using context
+      await this.improveEntityClassification(enhancedEntities, text, context);
+    }
+
+    return enhancedEntities;
+  }
+
+  /**
+   * Group semantically similar entities using embeddings
+   */
+  private async groupSimilarEntities(entities: Array<EntityRecord & { confidence: number }>): Promise<void> {
+    if (entities.length < 2) return;
+
+    try {
+      // Generate embeddings for entity names
+      const entityEmbeddings: Array<{ entity: EntityRecord & { confidence: number }, embedding: Float32Array }> = [];
+      
+      for (const entity of entities) {
+        try {
+          const embeddingResult = await generateEmbeddings({
+            provider: 'ollama',
+            model: 'mxbai-embed-large:latest',
+            input: entity.name
+          });
+          
+          entityEmbeddings.push({
+            entity,
+            embedding: new Float32Array(embeddingResult.embedding)
+          });
+        } catch (error) {
+          console.warn(`Failed to generate embedding for entity ${entity.name}:`, error);
+        }
+      }
+
+      // Find similar entities and merge them
+      const merged = new Set<string>();
+      for (let i = 0; i < entityEmbeddings.length; i++) {
+        if (merged.has(entityEmbeddings[i].entity.id)) continue;
+
+        for (let j = i + 1; j < entityEmbeddings.length; j++) {
+          if (merged.has(entityEmbeddings[j].entity.id)) continue;
+
+          const similarity = VectorUtils.cosineSimilarity(
+            entityEmbeddings[i].embedding,
+            entityEmbeddings[j].embedding
+          );
+
+          if (similarity >= this.config.semanticSimilarityThreshold) {
+            // Merge entities - keep the one with higher confidence
+            const entityA = entityEmbeddings[i].entity;
+            const entityB = entityEmbeddings[j].entity;
+
+            if (entityA.confidence >= entityB.confidence) {
+              // Merge B into A
+              entityA.properties = { ...entityA.properties, ...entityB.properties };
+              entityA.properties.mergedFrom = entityB.name;
+              entityA.confidence = Math.max(entityA.confidence, entityB.confidence + 0.1);
+              merged.add(entityB.id);
+            } else {
+              // Merge A into B
+              entityB.properties = { ...entityB.properties, ...entityA.properties };
+              entityB.properties.mergedFrom = entityA.name;
+              entityB.confidence = Math.max(entityB.confidence, entityA.confidence + 0.1);
+              merged.add(entityA.id);
+            }
+          }
+        }
+      }
+
+      // Remove merged entities
+      for (let i = entities.length - 1; i >= 0; i--) {
+        if (merged.has(entities[i].id)) {
+          entities.splice(i, 1);
+        }
+      }
+
+    } catch (error) {
+      console.warn('Failed to perform semantic similarity grouping:', error);
+    }
+  }
+
+  /**
+   * Improve entity type classification using contextual information
+   */
+  private async improveEntityClassification(
+    entities: Array<EntityRecord & { confidence: number }>,
+    text: string,
+    context: GraphContext
+  ): Promise<void> {
+    for (const entity of entities) {
+      try {
+        // Extract context around the entity mention
+        const entityContext = this.extractEntityContext(entity.name, text);
+        
+        // Use contextual clues to refine entity type
+        const refinedType = this.classifyEntityWithContext(entity.name, entityContext, entity.type);
+        
+        if (refinedType !== entity.type) {
+          entity.type = refinedType;
+          entity.confidence += 0.1; // Boost confidence for contextually refined entities
+          entity.properties.originalType = entity.type;
+          entity.properties.contextuallyRefined = true;
+        }
+
+        // Add contextual properties
+        entity.properties.context = entityContext;
+        entity.properties.confidence = entity.confidence;
+
+      } catch (error) {
+        console.warn(`Failed to improve classification for entity ${entity.name}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Extract context around entity mentions
+   */
+  private extractEntityContext(entityName: string, text: string): string {
+    const sentences = text.split(/[.!?]+/);
+    
+    for (const sentence of sentences) {
+      if (sentence.toLowerCase().includes(entityName.toLowerCase())) {
+        // Return the sentence containing the entity with some padding
+        const words = sentence.trim().split(/\s+/);
+        const entityIndex = words.findIndex(word => 
+          word.toLowerCase().includes(entityName.toLowerCase()) ||
+          entityName.toLowerCase().includes(word.toLowerCase())
+        );
+        
+        if (entityIndex !== -1) {
+          const start = Math.max(0, entityIndex - 3);
+          const end = Math.min(words.length, entityIndex + 4);
+          return words.slice(start, end).join(' ');
+        }
+        
+        return sentence.trim();
+      }
+    }
+    
+    return '';
+  }
+
+  /**
+   * Classify entity type using contextual clues
+   */
+  private classifyEntityWithContext(entityName: string, context: string, currentType: string): string {
+    const lowerContext = context.toLowerCase();
+    const lowerName = entityName.toLowerCase();
+
+    // Person indicators
+    if (this.hasPersonIndicators(lowerContext, lowerName)) {
+      return 'person';
+    }
+
+    // Organization indicators
+    if (this.hasOrganizationIndicators(lowerContext, lowerName)) {
+      return 'organization';
+    }
+
+    // Location indicators
+    if (this.hasLocationIndicators(lowerContext, lowerName)) {
+      return 'location';
+    }
+
+    // Technology/concept indicators
+    if (this.hasTechnologyIndicators(lowerContext, lowerName)) {
+      return 'technology';
+    }
+
+    // Event indicators
+    if (this.hasEventIndicators(lowerContext, lowerName)) {
+      return 'event';
+    }
+
+    return currentType; // Keep original type if no strong contextual indicators
+  }
+
+  private hasPersonIndicators(context: string, name: string): boolean {
+    const personKeywords = ['said', 'says', 'told', 'believes', 'thinks', 'worked', 'works', 'founded', 'ceo', 'director', 'manager', 'engineer', 'developer', 'researcher', 'professor', 'dr', 'mr', 'ms', 'mrs'];
+    return personKeywords.some(keyword => context.includes(keyword));
+  }
+
+  private hasOrganizationIndicators(context: string, name: string): boolean {
+    const orgKeywords = ['company', 'corporation', 'inc', 'llc', 'startup', 'firm', 'business', 'organization', 'team', 'group', 'department', 'division', 'university', 'college', 'institute'];
+    return orgKeywords.some(keyword => context.includes(keyword)) || /\b(corp|inc|llc|ltd)\b/i.test(name);
+  }
+
+  private hasLocationIndicators(context: string, name: string): boolean {
+    const locationKeywords = ['city', 'town', 'country', 'state', 'region', 'area', 'located', 'based', 'headquarters', 'office', 'building', 'street', 'avenue', 'road'];
+    return locationKeywords.some(keyword => context.includes(keyword));
+  }
+
+  private hasTechnologyIndicators(context: string, name: string): boolean {
+    const techKeywords = ['technology', 'software', 'platform', 'system', 'tool', 'framework', 'library', 'api', 'service', 'application', 'algorithm', 'model', 'database', 'server'];
+    return techKeywords.some(keyword => context.includes(keyword));
+  }
+
+  private hasEventIndicators(context: string, name: string): boolean {
+    const eventKeywords = ['conference', 'meeting', 'workshop', 'seminar', 'summit', 'event', 'gathering', 'session', 'talk', 'presentation', 'hackathon', 'competition'];
+    return eventKeywords.some(keyword => context.includes(keyword));
   }
 }

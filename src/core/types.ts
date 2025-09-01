@@ -92,6 +92,10 @@ export interface RelationshipRecord {
   type: string;
   confidence: number;
   properties: Record<string, any>;
+  /** Temporal tracking fields */
+  validFrom?: Date;
+  validUntil?: Date;
+  temporalType?: 'fact' | 'event' | 'state';
 }
 
 /**
@@ -372,6 +376,7 @@ export interface DomainGraph {
 
 /**
  * Cross-graph link connecting lexical and domain elements
+ * Enhanced with temporal tracking for link validity
  */
 export interface CrossGraphLink {
   /** Unique identifier for the link */
@@ -392,6 +397,10 @@ export interface CrossGraphLink {
   metadata: Record<string, any>;
   /** Creation timestamp */
   createdAt: Date;
+  /** Temporal tracking fields */
+  validFrom?: Date;
+  validUntil?: Date;
+  temporalType?: 'fact' | 'event' | 'state';
 }
 
 /**

@@ -1095,4 +1095,41 @@ export class AgentGraphMemory {
   clearClusters(): void {
     this.clusters.clear();
   }
+
+  // === Temporal Tracking Methods ===
+
+  /**
+   * Query relationships with temporal filtering
+   */
+  queryTemporalRelationships(query: any = {}): any[] {
+    return this.indexManager.queryTemporalRelationships(query);
+  }
+
+  /**
+   * Invalidate a relationship when it becomes outdated
+   */
+  invalidateRelationship(relationshipId: string, reason: string, timestamp?: Date): boolean {
+    return this.indexManager.invalidateRelationship(relationshipId, reason, timestamp);
+  }
+
+  /**
+   * Get temporal statistics for monitoring relationship validity
+   */
+  getTemporalStats(): any {
+    return this.indexManager.getTemporalStats();
+  }
+
+  /**
+   * Clean up old invalidated relationships
+   */
+  cleanupTemporalData(olderThan?: Date): number {
+    return this.indexManager.cleanupTemporalData(olderThan);
+  }
+
+  /**
+   * Stop temporal tracking (called during shutdown)
+   */
+  private stopTemporalTracking(): void {
+    this.indexManager.stopTemporalTracking();
+  }
 }
