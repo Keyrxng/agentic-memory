@@ -1,10 +1,29 @@
 {
   "name": "agentic-memory",
-  "module": "index.ts",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "type": "module",
-  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/server/index.ts",
+    "build": "bun run build:types && bun run build:bundle",
+    "build:bundle": "bun build index.ts --outdir ./dist --target node",
+    "build:types": "tsc",
+    "test": "bun test",
+    "manage-memories": "node scripts/manage-memories.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.1",
+    "compromise": "^14.14.4",
+    "hono": "^4.9.5",
+    "uuid": "^11.1.0"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/jest": "^30.0.0",
+    "@types/uuid": "^10.0.0",
+    "jest": "^30.1.1",
+    "jest-environment-node": "^30.1.1",
+    "ts-jest": "^29.4.1"
   },
   "peerDependencies": {
     "typescript": "^5"
