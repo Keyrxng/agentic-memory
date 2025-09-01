@@ -75,6 +75,53 @@ export interface DualGraphTemporalQuery {
 }
 
 /**
+ * Event sequence for tracking ordered events
+ */
+export interface EventSequence {
+  id: string;
+  name: string;
+  description?: string;
+  events: TemporalEvent[];
+  startTime: Date;
+  endTime?: Date;
+  status: 'active' | 'completed' | 'abandoned';
+  metadata: Record<string, any>;
+  contextId?: string;
+}
+
+/**
+ * Individual temporal event in a sequence
+ */
+export interface TemporalEvent {
+  id: string;
+  sequenceId: string;
+  type: string;
+  description: string;
+  timestamp: Date;
+  duration?: number; // in milliseconds
+  data: Record<string, any>;
+  causedBy?: string[]; // IDs of events that caused this event
+  causes?: string[]; // IDs of events caused by this event
+  relatedNodeIds: string[];
+  relatedEdgeIds: string[];
+  confidence: number;
+}
+
+/**
+ * Event sequence statistics for monitoring
+ */
+export interface SequenceStats {
+  totalSequences: number;
+  activeSequences: number;
+  completedSequences: number;
+  abandonedSequences: number;
+  totalEvents: number;
+  averageSequenceLength: number;
+  averageSequenceDuration: number;
+  mostCommonEventTypes: Array<{ type: string; count: number }>;
+}
+
+/**
  * Temporal statistics for monitoring
  */
 export interface TemporalStats {
@@ -93,6 +140,7 @@ export interface TemporalStats {
   };
   averageRelationshipAge: number;
   recentInvalidations: number;
+  sequences: SequenceStats;
 }
 
 /**
@@ -103,6 +151,12 @@ export class DualGraphTemporalManager {
   private temporalIndex: Map<string, TemporalRelationshipTracker> = new Map();
   private invalidationQueue: Map<string, InvalidationEvent> = new Map();
   private cleanupTimer?: NodeJS.Timeout;
+  
+  // Event sequence tracking
+  private eventSequences = new Map<string, EventSequence>();
+  private temporalEvents = new Map<string, TemporalEvent>();
+  private eventTypeCounter = new Map<string, number>();
+  private sequencePatterns = new Map<string, { count: number; avgDuration: number }>();
 
   constructor(config: Partial<DualGraphTemporalConfig> = {}) {
     this.config = {
@@ -269,7 +323,8 @@ export class DualGraphTemporalManager {
       relationshipsByType: { facts: 0, events: 0, states: 0 },
       relationshipsByGraph: { lexical: 0, domain: 0, crossGraph: 0 },
       averageRelationshipAge: 0,
-      recentInvalidations: 0
+      recentInvalidations: 0,
+      sequences: this.getSequenceStats()
     };
 
     const now = new Date();
@@ -416,6 +471,265 @@ export class DualGraphTemporalManager {
     this.cleanupTimer = setInterval(() => {
       this.cleanup();
     }, this.config.cleanupInterval);
+  }
+
+  // ========================================
+  // Event Sequence Tracking Methods
+  // ========================================
+
+  /**
+   * Start a new event sequence
+   */
+  startEventSequence(
+    name: string,
+    description?: string,
+    contextId?: string,
+    metadata: Record<string, any> = {}
+  ): string {
+    const sequenceId = `seq_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    const sequence: EventSequence = {
+      id: sequenceId,
+      name,
+      description,
+      events: [],
+      startTime: new Date(),
+      status: 'active',
+      metadata,
+      contextId
+    };
+
+    this.eventSequences.set(sequenceId, sequence);
+    console.log(`🎬 Started event sequence: ${name} (${sequenceId})`);
+    
+    return sequenceId;
+  }
+
+  /**
+   * Add an event to a sequence
+   */
+  addEvent(
+    sequenceId: string,
+    type: string,
+    description: string,
+    data: Record<string, any> = {},
+    relatedNodeIds: string[] = [],
+    relatedEdgeIds: string[] = [],
+    confidence: number = 1.0,
+    causedBy?: string[]
+  ): string {
+    const sequence = this.eventSequences.get(sequenceId);
+    if (!sequence) {
+      throw new Error(`Event sequence ${sequenceId} not found`);
+    }
+
+    if (sequence.status !== 'active') {
+      throw new Error(`Cannot add event to ${sequence.status} sequence ${sequenceId}`);
+    }
+
+    const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    const event: TemporalEvent = {
+      id: eventId,
+      sequenceId,
+      type,
+      description,
+      timestamp: new Date(),
+      data,
+      causedBy,
+      relatedNodeIds,
+      relatedEdgeIds,
+      confidence
+    };
+
+    // Update causal relationships
+    if (causedBy) {
+      for (const parentEventId of causedBy) {
+        const parentEvent = this.temporalEvents.get(parentEventId);
+        if (parentEvent) {
+          if (!parentEvent.causes) parentEvent.causes = [];
+          parentEvent.causes.push(eventId);
+        }
+      }
+    }
+
+    this.temporalEvents.set(eventId, event);
+    sequence.events.push(event);
+
+    // Update event type counter
+    const currentCount = this.eventTypeCounter.get(type) || 0;
+    this.eventTypeCounter.set(type, currentCount + 1);
+
+    console.log(`📝 Added event: ${type} to sequence ${sequence.name}`);
+    
+    return eventId;
+  }
+
+  /**
+   * Complete an event sequence
+   */
+  completeEventSequence(sequenceId: string): void {
+    const sequence = this.eventSequences.get(sequenceId);
+    if (!sequence) {
+      throw new Error(`Event sequence ${sequenceId} not found`);
+    }
+
+    sequence.status = 'completed';
+    sequence.endTime = new Date();
+
+    // Update sequence patterns
+    const duration = sequence.endTime.getTime() - sequence.startTime.getTime();
+    const patternKey = `${sequence.name}_${sequence.events.length}`;
+    const existing = this.sequencePatterns.get(patternKey);
+    
+    if (existing) {
+      existing.count += 1;
+      existing.avgDuration = (existing.avgDuration * (existing.count - 1) + duration) / existing.count;
+    } else {
+      this.sequencePatterns.set(patternKey, { count: 1, avgDuration: duration });
+    }
+
+    console.log(`✅ Completed event sequence: ${sequence.name} with ${sequence.events.length} events`);
+  }
+
+  /**
+   * Get active event sequences
+   */
+  getActiveSequences(): EventSequence[] {
+    return Array.from(this.eventSequences.values())
+      .filter(seq => seq.status === 'active');
+  }
+
+  /**
+   * Find sequences by pattern
+   */
+  findSequencesByPattern(
+    eventTypes: string[],
+    maxGap: number = 60000 // 1 minute max gap between events
+  ): EventSequence[] {
+    const matchingSequences: EventSequence[] = [];
+
+    for (const sequence of this.eventSequences.values()) {
+      if (this.sequenceMatchesPattern(sequence, eventTypes, maxGap)) {
+        matchingSequences.push(sequence);
+      }
+    }
+
+    return matchingSequences;
+  }
+
+  /**
+   * Enhanced temporal statistics including sequence data
+   */
+  getEnhancedTemporalStats(): TemporalStats {
+    const activeRelationships = Array.from(this.temporalIndex.values()).filter(t => t.isActive).length;
+    const invalidatedRelationships = Array.from(this.temporalIndex.values()).filter(t => !t.isActive).length;
+
+    const sequenceStats = this.getSequenceStats();
+
+    return {
+      totalTrackedRelationships: this.temporalIndex.size,
+      activeRelationships,
+      invalidatedRelationships,
+      relationshipsByType: {
+        facts: 0, // Would be calculated based on actual data
+        events: 0,
+        states: 0
+      },
+      relationshipsByGraph: {
+        lexical: 0,
+        domain: 0,
+        crossGraph: 0
+      },
+      averageRelationshipAge: this.calculateAverageAge(),
+      recentInvalidations: this.invalidationQueue.size,
+      sequences: sequenceStats
+    };
+  }
+
+  /**
+   * Get sequence-specific statistics
+   */
+  private getSequenceStats(): SequenceStats {
+    const sequences = Array.from(this.eventSequences.values());
+    const totalEvents = Array.from(this.temporalEvents.values()).length;
+
+    const activeSequences = sequences.filter(s => s.status === 'active').length;
+    const completedSequences = sequences.filter(s => s.status === 'completed').length;
+    const abandonedSequences = sequences.filter(s => s.status === 'abandoned').length;
+
+    const avgSequenceLength = sequences.length > 0 
+      ? sequences.reduce((sum, seq) => sum + seq.events.length, 0) / sequences.length 
+      : 0;
+
+    const completedWithDuration = sequences.filter(s => s.status === 'completed' && s.endTime);
+    const avgSequenceDuration = completedWithDuration.length > 0
+      ? completedWithDuration.reduce((sum, seq) => {
+          return sum + (seq.endTime!.getTime() - seq.startTime.getTime());
+        }, 0) / completedWithDuration.length
+      : 0;
+
+    const mostCommonEventTypes = Array.from(this.eventTypeCounter.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([type, count]) => ({ type, count }));
+
+    return {
+      totalSequences: sequences.length,
+      activeSequences,
+      completedSequences,
+      abandonedSequences,
+      totalEvents,
+      averageSequenceLength: Math.round(avgSequenceLength * 100) / 100,
+      averageSequenceDuration: Math.round(avgSequenceDuration),
+      mostCommonEventTypes
+    };
+  }
+
+  /**
+   * Check if sequence matches a pattern
+   */
+  private sequenceMatchesPattern(
+    sequence: EventSequence,
+    eventTypes: string[],
+    maxGap: number
+  ): boolean {
+    if (sequence.events.length < eventTypes.length) return false;
+
+    let patternIndex = 0;
+    let lastMatchTime: Date | null = null;
+
+    for (const event of sequence.events) {
+      if (event.type === eventTypes[patternIndex]) {
+        if (lastMatchTime && event.timestamp.getTime() - lastMatchTime.getTime() > maxGap) {
+          return false; // Gap too large
+        }
+        
+        lastMatchTime = event.timestamp;
+        patternIndex++;
+        
+        if (patternIndex >= eventTypes.length) {
+          return true; // Found all pattern events
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Calculate average age of relationships
+   */
+  private calculateAverageAge(): number {
+    const trackers = Array.from(this.temporalIndex.values());
+    if (trackers.length === 0) return 0;
+
+    const now = new Date().getTime();
+    const totalAge = trackers.reduce((sum, tracker) => {
+      return sum + (now - tracker.createdAt.getTime());
+    }, 0);
+
+    return Math.round(totalAge / trackers.length);
   }
 }
 

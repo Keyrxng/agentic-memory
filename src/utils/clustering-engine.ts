@@ -26,6 +26,17 @@ export interface ClusteringConfig {
 }
 
 /**
+ * Internal hierarchical cluster representation
+ */
+interface HierarchicalCluster {
+  id: string;
+  nodes: GraphNode[];
+  centroid: Float32Array;
+  size: number;
+  mergedFrom: string[];
+}
+
+/**
  * Clustering engine for semantic grouping of memory nodes
  */
 export class ClusteringEngine {
@@ -62,8 +73,12 @@ export class ClusteringEngine {
       );
       clusters.push(...kmeansClusters);
     } else if (config.clusteringAlgorithm === 'hierarchical') {
-      // Placeholder for hierarchical clustering
-      console.log('Hierarchical clustering not yet implemented');
+      const hierarchicalClusters = await this.performHierarchicalClustering(
+        nodesWithEmbeddings,
+        config.maxClusters,
+        config.similarityThreshold
+      );
+      clusters.push(...hierarchicalClusters);
     }
 
     const processingTime = Date.now() - startTime;
@@ -143,6 +158,100 @@ export class ClusteringEngine {
           members: clusterNodes,
           theme,
           confidence: this.calculateClusterConfidence(clusterNodes, centroids[i]),
+          createdAt: new Date(),
+          lastUpdated: new Date()
+        });
+      }
+    }
+
+    return clusters;
+  }
+
+  /**
+   * Perform agglomerative hierarchical clustering on nodes with embeddings
+   */
+  private async performHierarchicalClustering(
+    nodes: GraphNode[],
+    maxClusters: number,
+    similarityThreshold: number
+  ): Promise<MemoryCluster[]> {
+    const clusters: MemoryCluster[] = [];
+    const embeddings = nodes.map(node => node.embeddings!).filter(Boolean);
+
+    if (embeddings.length === 0) return clusters;
+
+    // Initialize each node as its own cluster
+    let currentClusters: HierarchicalCluster[] = nodes.map((node, index) => ({
+      id: `cluster_${index}`,
+      nodes: [node],
+      centroid: new Float32Array(node.embeddings!),
+      size: 1,
+      mergedFrom: []
+    }));
+
+    let clusterId = nodes.length;
+
+    // Continue merging until we have the desired number of clusters or similarity threshold is met
+    while (currentClusters.length > Math.max(1, maxClusters)) {
+      // Find the two most similar clusters
+      let bestPair = { i: 0, j: 1, similarity: 0 };
+      
+      for (let i = 0; i < currentClusters.length; i++) {
+        for (let j = i + 1; j < currentClusters.length; j++) {
+          const similarity = VectorUtils.cosineSimilarity(
+            currentClusters[i].centroid,
+            currentClusters[j].centroid
+          );
+          
+          if (similarity > bestPair.similarity) {
+            bestPair = { i, j, similarity };
+          }
+        }
+      }
+
+      // Stop if similarity is too low
+      if (bestPair.similarity < similarityThreshold) {
+        break;
+      }
+
+      // Merge the two most similar clusters
+      const cluster1 = currentClusters[bestPair.i];
+      const cluster2 = currentClusters[bestPair.j];
+      
+      const mergedNodes = [...cluster1.nodes, ...cluster2.nodes];
+      const mergedEmbeddings = mergedNodes
+        .map(node => node.embeddings!)
+        .filter(Boolean) as Float32Array[];
+      
+      const mergedCluster: HierarchicalCluster = {
+        id: `cluster_${clusterId++}`,
+        nodes: mergedNodes,
+        centroid: VectorUtils.calculateCentroid(mergedEmbeddings),
+        size: mergedNodes.length,
+        mergedFrom: [cluster1.id, cluster2.id]
+      };
+
+      // Remove the original clusters and add the merged one
+      currentClusters = currentClusters.filter((_, index) => 
+        index !== bestPair.i && index !== bestPair.j
+      );
+      currentClusters.push(mergedCluster);
+    }
+
+    // Convert hierarchical clusters to MemoryCluster format
+    for (let i = 0; i < currentClusters.length; i++) {
+      const hierarchicalCluster = currentClusters[i];
+      
+      if (hierarchicalCluster.nodes.length >= 2) { // Minimum cluster size
+        const theme = this.extractClusterTheme(hierarchicalCluster.nodes);
+        const confidence = this.calculateClusterConfidence(hierarchicalCluster.nodes, hierarchicalCluster.centroid);
+        
+        clusters.push({
+          id: `hierarchical_${hierarchicalCluster.id}_${Date.now()}`,
+          centroid: hierarchicalCluster.centroid,
+          members: hierarchicalCluster.nodes,
+          theme,
+          confidence,
           createdAt: new Date(),
           lastUpdated: new Date()
         });
