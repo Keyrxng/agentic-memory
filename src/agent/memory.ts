@@ -49,6 +49,9 @@ import {
   type ClusteringConfig
 } from '../utils/index.js';
 
+import { DualGraphIndexManager } from '../indexing/dual-graph-index-manager.js';
+import { UnifiedQueryProcessor } from '../indexing/unified-query-processor.js';
+
 /**
  * Configuration for the agentic memory system
  */
@@ -170,6 +173,10 @@ export class AgentGraphMemory {
   private clusteringEngine: ClusteringEngine;
   private queryProcessor: QueryProcessor;
 
+  // New integrated components
+  private indexManager: DualGraphIndexManager;
+  private unifiedQueryProcessor: UnifiedQueryProcessor;
+
   // Dual graph storage
   private lexicalGraphs: Map<string, LexicalGraph> = new Map();
   private domainGraphs: Map<string, DomainGraph> = new Map();
@@ -274,6 +281,38 @@ export class AgentGraphMemory {
     this.memoryManager = new MemoryManager(this.config.memory);
     this.clusteringEngine = new ClusteringEngine();
     this.queryProcessor = new QueryProcessor();
+
+    // Initialize new integrated components
+    this.indexManager = new DualGraphIndexManager({
+      memory: this.config.memory,
+      clustering: {
+        enabled: true,
+        similarityThreshold: 0.7,
+        maxClusters: 50,
+        minClusterSize: 3
+      },
+      resolution: {
+        fuzzyThreshold: 0.8,
+        enableEmbeddings: true
+      }
+    });
+    this.unifiedQueryProcessor = new UnifiedQueryProcessor(this.indexManager);
+
+    // Initialize new integrated components
+    this.indexManager = new DualGraphIndexManager({
+      memory: this.config.memory,
+      clustering: {
+        enabled: true,
+        similarityThreshold: 0.7,
+        maxClusters: 50,
+        minClusterSize: 3
+      },
+      resolution: {
+        fuzzyThreshold: 0.8,
+        enableEmbeddings: true
+      }
+    });
+    this.unifiedQueryProcessor = new UnifiedQueryProcessor(this.indexManager);
   }
 
   /**
@@ -359,6 +398,30 @@ export class AgentGraphMemory {
     for (const link of dualGraphResult.crossLinks) {
       this.crossGraphLinks.set(link.id, link);
     }
+
+    // Index the dual graphs using the integrated index manager
+    await this.indexManager.indexLexicalGraph(dualGraphResult.lexicalGraph);
+    await this.indexManager.indexDomainGraph(dualGraphResult.domainGraph);
+    await this.indexManager.indexCrossGraphLinks(dualGraphResult.crossLinks);
+
+    // Update unified query processor with new graphs
+    this.unifiedQueryProcessor.updateGraphReferences(
+      this.lexicalGraphs,
+      this.domainGraphs,
+      this.crossGraphLinks
+    );
+
+    // Index the dual graphs using the integrated index manager
+    await this.indexManager.indexLexicalGraph(dualGraphResult.lexicalGraph);
+    await this.indexManager.indexDomainGraph(dualGraphResult.domainGraph);
+    await this.indexManager.indexCrossGraphLinks(dualGraphResult.crossLinks);
+
+    // Update unified query processor with new graphs
+    this.unifiedQueryProcessor.updateGraphReferences(
+      this.lexicalGraphs,
+      this.domainGraphs,
+      this.crossGraphLinks
+    );
 
     // Convert domain graph entities and relationships to legacy format for backward compatibility
     const entities = Array.from(dualGraphResult.domainGraph.entities.values());
@@ -493,8 +556,6 @@ export class AgentGraphMemory {
 
   /**
    * Query memory using dual graph architecture
-   * 
-   * NEW: Advanced querying with both lexical and domain search
    */
   async queryMemory(
     query: string | DualGraphQuery,
@@ -541,17 +602,28 @@ export class AgentGraphMemory {
       }
     } : query;
 
-    // Query lexical graphs
-    const lexicalResults = await this.queryLexicalGraphs(dualGraphQuery.lexicalQuery);
-    
-    // Query domain graphs
-    const domainResults = await this.queryDomainGraphs(dualGraphQuery.domainQuery);
-    
-    // Query cross-graph links
-    const crossGraphResults = await this.queryCrossGraphLinks(dualGraphQuery.crossGraphQuery);
-    
-    // Combine results and create legacy format for backward compatibility
-    const combinedEntities = domainResults.entities.map(e => ({
+    // Use the unified query processor for enhanced querying
+    const enhancedQuery = {
+      ...dualGraphQuery,
+      memory: {
+        prioritizeRecent: true,
+        includeClusters: true
+      },
+      resolution: {
+        enableFuzzyMatching: true,
+        confidenceThreshold: 0.8
+      },
+      processing: {
+        enableParallel: false,
+        maxResults: options.limit,
+        sortBy: 'relevance' as const
+      }
+    };
+
+    const result = await this.unifiedQueryProcessor.executeQuery(enhancedQuery, context);
+
+    // Convert back to legacy format for backward compatibility
+    const entities = result.domainResults.entities.map(e => ({
       id: e.id,
       type: e.type,
       properties: e.properties,
@@ -560,7 +632,7 @@ export class AgentGraphMemory {
       updatedAt: new Date()
     }));
 
-    const combinedRelationships = domainResults.relationships.map(r => ({
+    const relationships = result.domainResults.relationships.map(r => ({
       id: r.id,
       source: r.source,
       target: r.target,
@@ -574,29 +646,19 @@ export class AgentGraphMemory {
     const queryTime = Date.now() - startTime;
 
     return {
-      entities: combinedEntities,
-      relationships: combinedRelationships,
+      entities,
+      relationships,
       subgraph: {
-        nodes: combinedEntities,
-        edges: combinedRelationships,
+        nodes: entities,
+        edges: relationships,
         paths: new Map()
       },
       metadata: {
         queryTime,
-        nodesTraversed: combinedEntities.length + combinedRelationships.length,
-        relevanceScores: new Map()
+        nodesTraversed: entities.length + relationships.length,
+        relevanceScores: new Map(result.domainResults.relevanceScores)
       },
-      dualGraphResults: {
-        lexicalResults,
-        domainResults,
-        crossGraphResults,
-        combinedResults: [],
-        metadata: {
-          queryTime,
-          totalResults: combinedEntities.length + combinedRelationships.length,
-          processingDetails: {}
-        }
-      }
+      dualGraphResults: result
     };
   }
 
@@ -645,148 +707,62 @@ export class AgentGraphMemory {
   }
 
   /**
-   * Query lexical graphs
+   * Get integrated memory statistics from all components
    */
-  private async queryLexicalGraphs(
-    lexicalQuery?: DualGraphQuery['lexicalQuery']
-  ): Promise<DualGraphQueryResult['lexicalResults']> {
-    if (!lexicalQuery) {
-      return { chunks: [], relations: [], relevanceScores: new Map() };
-    }
-
-    const chunks: TextChunk[] = [];
-    const relations: any[] = [];
-    const relevanceScores = new Map<string, number>();
-
-    // Search across all lexical graphs
-    for (const [key, lexicalGraph] of this.lexicalGraphs) {
-      if (lexicalQuery.textSearch) {
-        const matchingChunks = Array.from(lexicalGraph.textChunks.values()).filter(chunk =>
-          chunk.content.toLowerCase().includes(lexicalQuery.textSearch!.toLowerCase())
-        );
-        chunks.push(...matchingChunks);
-        
-        // Add relevance scores
-        for (const chunk of matchingChunks) {
-          relevanceScores.set(chunk.id, 0.8);
-        }
-      }
-    }
-
-    return { chunks, relations, relevanceScores };
-  }
-
-  /**
-   * Query domain graphs
-   */
-  private async queryDomainGraphs(
-    domainQuery?: DualGraphQuery['domainQuery']
-  ): Promise<DualGraphQueryResult['domainResults']> {
-    if (!domainQuery) {
-      return { entities: [], relationships: [], hierarchies: [], relevanceScores: new Map() };
-    }
-
-    const entities: EntityRecord[] = [];
-    const relationships: RelationshipRecord[] = [];
-    const hierarchies: any[] = [];
-    const relevanceScores = new Map<string, number>();
-
-    // Search across all domain graphs
-    for (const [key, domainGraph] of this.domainGraphs) {
-      if (domainQuery.entityTypes) {
-        const matchingEntities = Array.from(domainGraph.entities.values()).filter(entity =>
-          domainQuery.entityTypes!.includes(entity.type)
-        );
-        entities.push(...matchingEntities);
-      } else {
-        entities.push(...Array.from(domainGraph.entities.values()));
-      }
-
-      if (domainQuery.relationshipTypes) {
-        const matchingRelationships = Array.from(domainGraph.semanticRelations.values()).filter(rel =>
-          domainQuery.relationshipTypes!.includes(rel.type)
-        );
-        relationships.push(...matchingRelationships);
-      } else {
-        relationships.push(...Array.from(domainGraph.semanticRelations.values()));
-      }
-
-      hierarchies.push(...Array.from(domainGraph.entityHierarchies.values()));
-    }
-
-    // Add relevance scores
-    for (const entity of entities) {
-      relevanceScores.set(entity.id, 0.7);
-    }
-
-    return { entities, relationships, hierarchies, relevanceScores };
-  }
-
-  /**
-   * Query cross-graph links
-   */
-  private async queryCrossGraphLinks(
-    crossGraphQuery?: DualGraphQuery['crossGraphQuery']
-  ): Promise<DualGraphQueryResult['crossGraphResults']> {
-    if (!crossGraphQuery) {
-      return { links: [], relevanceScores: new Map() };
-    }
-
-    const links: CrossGraphLink[] = [];
-    const relevanceScores = new Map<string, number>();
-
-    // Filter cross-graph links based on query
-    for (const [id, link] of this.crossGraphLinks) {
-      if (crossGraphQuery.linkTypes && !crossGraphQuery.linkTypes.includes(link.type)) {
-        continue;
-      }
-      
-      if (crossGraphQuery.sourceGraph && link.sourceGraph !== crossGraphQuery.sourceGraph) {
-        continue;
-      }
-      
-      if (crossGraphQuery.targetGraph && link.targetGraph !== crossGraphQuery.targetGraph) {
-        continue;
-      }
-
-      links.push(link);
-      relevanceScores.set(link.id, link.confidence);
-    }
-
-    return { links, relevanceScores };
-  }
-
-  /**
-   * Get dual graph statistics
-   */
-  getDualGraphStats(): {
-    lexicalGraphs: number;
-    domainGraphs: number;
-    crossGraphLinks: number;
-    totalChunks: number;
-    totalEntities: number;
-    totalRelationships: number;
-  } {
-    let totalChunks = 0;
-    let totalEntities = 0;
-    let totalRelationships = 0;
-
-    for (const lexicalGraph of this.lexicalGraphs.values()) {
-      totalChunks += lexicalGraph.textChunks.size;
-    }
-
-    for (const domainGraph of this.domainGraphs.values()) {
-      totalEntities += domainGraph.entities.size;
-      totalRelationships += domainGraph.semanticRelations.size;
-    }
-
-    return {
+  async getIntegratedStats(): Promise<{
+    // Core graph stats
+    graph: GraphMetrics;
+    // Dual graph stats
+    dualGraph: {
+      lexicalGraphs: number;
+      domainGraphs: number;
+      crossGraphLinks: number;
+      totalChunks: number;
+      totalEntities: number;
+      totalRelationships: number;
+    };
+    // Index manager stats
+    indexing: any;
+    // Memory management stats
+    memory: any;
+    // Clustering stats
+    clustering: any;
+    // Overall system health
+    system: {
+      totalMemoryUsage: number;
+      totalProcessingTime: number;
+      cacheEfficiency: number;
+    };
+  }> {
+    const graphStats = await this.getMemoryStats();
+    const dualGraphStats = {
       lexicalGraphs: this.lexicalGraphs.size,
       domainGraphs: this.domainGraphs.size,
       crossGraphLinks: this.crossGraphLinks.size,
-      totalChunks,
-      totalEntities,
-      totalRelationships
+      totalChunks: Array.from(this.lexicalGraphs.values()).reduce((sum, g) => sum + g.textChunks.size, 0),
+      totalEntities: Array.from(this.domainGraphs.values()).reduce((sum, g) => sum + g.entities.size, 0),
+      totalRelationships: Array.from(this.domainGraphs.values()).reduce((sum, g) => sum + g.semanticRelations.size, 0)
+    };
+    const indexingStats = this.indexManager.getStats();
+    const memoryStats = this.indexManager.getMemoryStats();
+    const clusteringStats = this.indexManager.getClusteringStats();
+
+    const totalMemoryUsage = 
+      (graphStats.memoryUsage || 0) + 
+      (indexingStats.overall.totalMemoryUsage || 0) + 
+      (memoryStats.accessOrderSize * 50); // Rough estimate
+
+    return {
+      graph: graphStats,
+      dualGraph: dualGraphStats,
+      indexing: indexingStats,
+      memory: memoryStats,
+      clustering: clusteringStats,
+      system: {
+        totalMemoryUsage,
+        totalProcessingTime: 0, // Would be tracked separately
+        cacheEfficiency: indexingStats.performance.cacheHitRate || 0
+      }
     };
   }
 
@@ -811,6 +787,9 @@ export class AgentGraphMemory {
     this.lexicalGraphs.clear();
     this.domainGraphs.clear();
     this.crossGraphLinks.clear();
+    
+    // Clear index manager
+    this.indexManager.clearAll();
     
     // Reinitialize utilities
     this.entityResolver.updateIndex([]);

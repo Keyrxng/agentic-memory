@@ -79,7 +79,7 @@ export class LexicalGraphExtractor {
       enableSemanticChunking: config.enableSemanticChunking ?? false,
       minChunkConfidence: config.minChunkConfidence ?? 0.7,
       enableEmbeddings: config.enableEmbeddings ?? true,
-      embeddingModel: config.embeddingModel ?? 'default',
+      embeddingModel: config.embeddingModel ?? 'mxbai-embed-large:latest',
       enableLexicalRelations: config.enableLexicalRelations ?? true,
       coOccurrenceWindow: config.coOccurrenceWindow ?? 5,
       ...config

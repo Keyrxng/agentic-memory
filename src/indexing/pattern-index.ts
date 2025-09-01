@@ -170,7 +170,6 @@ export class PatternIndex implements GraphIndex {
 
     // Rebuild from graph data
     // This would typically involve extracting common patterns
-    // For now, we'll rebuild the index structure
     for (const item of items) {
       if (item.data.pattern && typeof item.data.pattern === 'object') {
         this.add(item.data.pattern, item.id);
