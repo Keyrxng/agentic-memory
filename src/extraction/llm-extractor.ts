@@ -25,8 +25,10 @@ import type {
   EntityRecord,
   RelationshipRecord,
   DependencyRelation,
-  GraphContext
+  GraphContext,
+  GraphNode
 } from '../core/types.js';
+import { EntityResolver } from '../utils/entity-resolver.js';
 
 /**
  * Configuration for LLM-based extraction
@@ -119,6 +121,7 @@ interface LLMRelationshipResult {
  */
 export class LLMBasedExtractor {
   private config: LLMExtractionConfig;
+  private entityResolver: EntityResolver;
 
   constructor(config: Partial<LLMExtractionConfig> = {}) {
     this.config = {
@@ -171,7 +174,7 @@ export class LLMBasedExtractor {
 
     // Perform entity resolution if enabled
     if (this.config.enableEntityResolution) {
-      const resolvedEntities = await this.resolveEntities(entities, context);
+      const resolvedEntities = await this.resolveEntities(entities, context, []);
       const resolvedRelationships = this.updateRelationshipsWithResolvedEntities(relationships, resolvedEntities);
       
       // Update entities with resolution results
@@ -534,27 +537,46 @@ Extract all relationships and return as JSON:`;
    */
   private async resolveEntities(
     entities: Array<EntityRecord & { confidence: number }>,
-    context: GraphContext
+    context: GraphContext,
+    existingEntities: EntityRecord[] = []
   ): Promise<Array<{ originalId: string; matched: EntityRecord | null; confidence: number; method: string }>> {
     const results = [];
 
+    // Convert existing entities to GraphNode format for EntityResolver
+    const graphNodes = new Map<string, GraphNode>();
+    for (const entity of existingEntities) {
+      graphNodes.set(entity.id, {
+        id: entity.id,
+        type: entity.type,
+        properties: entity.properties,
+        embeddings: entity.embeddings ? new Float32Array(entity.embeddings) : undefined,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+    }
+
+    // Update the entity resolver's index with existing entities
+    this.entityResolver.updateIndex(Array.from(graphNodes.values()));
+
     for (const entity of entities) {
-      // For now, we'll use a simple approach - in a real system,
-      // you'd query your existing entity database
-      const resolution = {
+      // Use the full EntityResolver capabilities
+      const resolution = this.entityResolver.resolveEntity(
+        entity,
+        graphNodes,
+        {
+          fuzzyThreshold: 0.8,
+          enableEmbeddings: true
+        }
+      );
+
+      const result = {
         originalId: entity.id,
-        matched: null as EntityRecord | null,
-        confidence: 0,
-        method: 'none' as const
+        matched: resolution.matched,
+        confidence: resolution.confidence,
+        method: resolution.matched ? 'entity_resolver' : 'none'
       };
 
-      // TODO: Implement actual entity resolution logic
-      // This would involve:
-      // 1. Querying existing entities by name similarity
-      // 2. Using embeddings for semantic similarity
-      // 3. Applying business rules for entity matching
-
-      results.push(resolution);
+      results.push(result);
     }
 
     return results;

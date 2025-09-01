@@ -32,6 +32,7 @@ import type {
   StorageStats,
   GraphStorage
 } from './types.js';
+import type { LexicalGraph, DomainGraph, CrossGraphLink } from '../core/types.js';
 
 /**
  * JSONL-based storage implementation
@@ -777,5 +778,176 @@ export class JSONLGraphStorage implements GraphStorage {
     }
     this.nodeFiles = [];
     this.edgeFiles = [];
+  }
+
+  /**
+   * Store lexical graphs to persistent storage
+   */
+  async storeLexicalGraphs(graphs: LexicalGraph[]): Promise<StorageResult> {
+    if (!this.initialized) {
+      throw new Error('Storage not initialized');
+    }
+
+    const startTime = Date.now();
+    let stored = 0;
+
+    try {
+      for (const graph of graphs) {
+        const fileName = `lexical_graphs_${Date.now()}.jsonl`;
+        const filePath = join(this.config.directory, fileName);
+        
+        const graphData = {
+          type: 'lexical_graph',
+          id: graph.id,
+          data: {
+            ...graph,
+            textChunks: Array.from(graph.textChunks.entries()),
+            lexicalRelations: Array.from(graph.lexicalRelations.entries())
+          },
+          timestamp: new Date().toISOString()
+        };
+
+        await fs.writeFile(filePath, JSON.stringify(graphData) + '\n', 'utf-8');
+        stored++;
+      }
+
+      return {
+        success: true,
+        count: stored,
+        processingTime: Date.now() - startTime
+      };
+    } catch (error) {
+      return {
+        success: false,
+        count: stored,
+        processingTime: Date.now() - startTime,
+        errors: [error instanceof Error ? error.message : 'Unknown error storing lexical graphs']
+      };
+    }
+  }
+
+  /**
+   * Store domain graphs to persistent storage
+   */
+  async storeDomainGraphs(graphs: DomainGraph[]): Promise<StorageResult> {
+    if (!this.initialized) {
+      throw new Error('Storage not initialized');
+    }
+
+    const startTime = Date.now();
+    let stored = 0;
+
+    try {
+      for (const graph of graphs) {
+        const fileName = `domain_graphs_${Date.now()}.jsonl`;
+        const filePath = join(this.config.directory, fileName);
+        
+        const graphData = {
+          type: 'domain_graph',
+          id: graph.id,
+          data: {
+            ...graph,
+            entities: Array.from(graph.entities.entries()),
+            semanticRelations: Array.from(graph.semanticRelations.entries()),
+            entityHierarchies: Array.from(graph.entityHierarchies.entries())
+          },
+          timestamp: new Date().toISOString()
+        };
+
+        await fs.writeFile(filePath, JSON.stringify(graphData) + '\n', 'utf-8');
+        stored++;
+      }
+
+      return {
+        success: true,
+        count: stored,
+        processingTime: Date.now() - startTime
+      };
+    } catch (error) {
+      return {
+        success: false,
+        count: stored,
+        processingTime: Date.now() - startTime,
+        errors: [error instanceof Error ? error.message : 'Unknown error storing domain graphs']
+      };
+    }
+  }
+
+  /**
+   * Store cross-graph links to persistent storage
+   */
+  async storeCrossGraphLinks(links: CrossGraphLink[]): Promise<StorageResult> {
+    if (!this.initialized) {
+      throw new Error('Storage not initialized');
+    }
+
+    const startTime = Date.now();
+
+    try {
+      const fileName = `cross_graph_links_${Date.now()}.jsonl`;
+      const filePath = join(this.config.directory, fileName);
+      
+      const linkData = links.map(link => ({
+        type: 'cross_graph_link',
+        id: link.id,
+        data: link,
+        timestamp: new Date().toISOString()
+      }));
+
+      const content = linkData.map(data => JSON.stringify(data)).join('\n') + '\n';
+      await fs.writeFile(filePath, content, 'utf-8');
+
+      return {
+        success: true,
+        count: links.length,
+        processingTime: Date.now() - startTime
+      };
+    } catch (error) {
+      return {
+        success: false,
+        count: 0,
+        processingTime: Date.now() - startTime,
+        errors: [error instanceof Error ? error.message : 'Unknown error storing cross-graph links']
+      };
+    }
+  }
+
+  /**
+   * Load lexical graphs from persistent storage
+   */
+  async loadLexicalGraphs(options: {
+    limit?: number;
+    offset?: number;
+    since?: Date;
+  } = {}): Promise<{ graphs: LexicalGraph[]; hasMore: boolean }> {
+    // Implementation would scan for lexical graph files and load them
+    // For now, return empty result
+    return { graphs: [], hasMore: false };
+  }
+
+  /**
+   * Load domain graphs from persistent storage
+   */
+  async loadDomainGraphs(options: {
+    limit?: number;
+    offset?: number;
+    since?: Date;
+  } = {}): Promise<{ graphs: DomainGraph[]; hasMore: boolean }> {
+    // Implementation would scan for domain graph files and load them
+    // For now, return empty result
+    return { graphs: [], hasMore: false };
+  }
+
+  /**
+   * Load cross-graph links from persistent storage
+   */
+  async loadCrossGraphLinks(options: {
+    limit?: number;
+    offset?: number;
+    since?: Date;
+  } = {}): Promise<{ links: CrossGraphLink[]; hasMore: boolean }> {
+    // Implementation would scan for cross-graph link files and load them
+    // For now, return empty result
+    return { links: [], hasMore: false };
   }
 }

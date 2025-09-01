@@ -30,8 +30,19 @@ export class VectorIndex implements GraphIndex {
   private queryCount = 0;
   private hitCount = 0;
 
-  // For simple linear search (can be replaced with ANN algorithms)
+  // ANN algorithm configuration
   private dimension = 0;
+  private useANN = true; // Enable ANN by default
+  private annConfig = {
+    maxConnections: 16, // Maximum connections per node in HNSW
+    efConstruction: 200, // Construction parameter for HNSW
+    efSearch: 50, // Search parameter for HNSW
+    minElements: 100 // Minimum elements before using ANN
+  };
+
+  // HNSW graph structure
+  private hnswGraph: Map<string, Set<string>> = new Map();
+  private entryPoint?: string;
 
   add(vector: Float32Array, itemId: string, metadata?: any): void {
     if (!vector || vector.length === 0) {
@@ -48,6 +59,11 @@ export class VectorIndex implements GraphIndex {
     // Store vector
     this.vectors.set(itemId, new Float32Array(vector));
     this.itemToVector.set(itemId, new Float32Array(vector));
+
+    // Build HNSW graph if ANN is enabled and we have enough elements
+    if (this.useANN && this.vectors.size >= this.annConfig.minElements) {
+      this.addToHNSW(itemId, vector);
+    }
   }
 
   remove(vector: Float32Array, itemId: string): void {
@@ -59,8 +75,13 @@ export class VectorIndex implements GraphIndex {
     this.queryCount++;
 
     if (query instanceof Float32Array) {
-      // Simple vector query
-      return this.querySimple(query, options);
+      // Use ANN if available and we have enough vectors
+      if (this.useANN && this.vectors.size >= this.annConfig.minElements && this.entryPoint) {
+        return this.queryHNSW(query, options);
+      } else {
+        // Fall back to simple linear search
+        return this.querySimple(query, options);
+      }
     }
 
     // Complex vector query
@@ -83,6 +104,8 @@ export class VectorIndex implements GraphIndex {
     this.queryCount = 0;
     this.hitCount = 0;
     this.dimension = 0;
+    this.hnswGraph.clear();
+    this.entryPoint = undefined;
   }
 
   async rebuild(items: Array<{id: string, data: any}>): Promise<void> {
@@ -299,5 +322,174 @@ export class VectorIndex implements GraphIndex {
     const mapOverhead = this.vectors.size * 50;
 
     return vectorMemory + mapOverhead;
+  }
+
+  /**
+   * Add vector to HNSW graph
+   */
+  private addToHNSW(itemId: string, vector: Float32Array): void {
+    // Initialize graph node
+    this.hnswGraph.set(itemId, new Set());
+
+    // If this is the first node, set it as entry point
+    if (!this.entryPoint) {
+      this.entryPoint = itemId;
+      return;
+    }
+
+    // Find nearest neighbors for new node
+    const candidates = this.searchLayer(vector, this.annConfig.efConstruction);
+    
+    // Connect to M nearest neighbors
+    const connections = Math.min(this.annConfig.maxConnections, candidates.length);
+    for (let i = 0; i < connections; i++) {
+      const neighborId = candidates[i].itemId;
+      
+      // Add bidirectional connection
+      this.hnswGraph.get(itemId)?.add(neighborId);
+      this.hnswGraph.get(neighborId)?.add(itemId);
+      
+      // Prune connections if neighbor has too many
+      this.pruneConnections(neighborId);
+    }
+  }
+
+  /**
+   * Query using HNSW graph
+   */
+  private queryHNSW(queryVector: Float32Array, options: QueryOptions): Set<string> {
+    if (!this.entryPoint) {
+      return new Set();
+    }
+
+    this.hitCount++;
+
+    // Search the graph starting from entry point
+    const candidates = this.searchLayer(queryVector, this.annConfig.efSearch);
+    
+    // Apply threshold and limit
+    const threshold = options.threshold || 0.7;
+    const limit = options.limit || 10;
+
+    const results = candidates
+      .filter(item => item.similarity >= threshold)
+      .slice(0, limit)
+      .map(item => item.itemId);
+
+    return new Set(results);
+  }
+
+  /**
+   * Search layer in HNSW graph
+   */
+  private searchLayer(queryVector: Float32Array, ef: number): Array<{itemId: string, similarity: number}> {
+    const visited = new Set<string>();
+    const candidates: Array<{itemId: string, similarity: number}> = [];
+    const w = new Set<string>();
+
+    if (!this.entryPoint) {
+      return [];
+    }
+
+    // Start with entry point
+    const entryVector = this.vectors.get(this.entryPoint);
+    if (!entryVector) {
+      return [];
+    }
+
+    const entrySimilarity = this.cosineSimilarity(queryVector, entryVector);
+    candidates.push({ itemId: this.entryPoint, similarity: entrySimilarity });
+    w.add(this.entryPoint);
+    visited.add(this.entryPoint);
+
+    while (candidates.length > 0) {
+      // Get closest unvisited candidate
+      candidates.sort((a, b) => b.similarity - a.similarity);
+      const current = candidates.shift();
+      if (!current) break;
+
+      // Check if we should continue searching
+      if (w.size >= ef && current.similarity < Math.min(...Array.from(w).map(id => {
+        const vec = this.vectors.get(id);
+        return vec ? this.cosineSimilarity(queryVector, vec) : 0;
+      }))) {
+        break;
+      }
+
+      // Explore neighbors
+      const neighbors = this.hnswGraph.get(current.itemId);
+      if (neighbors) {
+        for (const neighborId of neighbors) {
+          if (!visited.has(neighborId)) {
+            visited.add(neighborId);
+            
+            const neighborVector = this.vectors.get(neighborId);
+            if (neighborVector) {
+              const similarity = this.cosineSimilarity(queryVector, neighborVector);
+              candidates.push({ itemId: neighborId, similarity });
+              w.add(neighborId);
+              
+              // Keep only ef best candidates
+              if (w.size > ef) {
+                const worstId = Array.from(w).reduce((worst, id) => {
+                  const worstVec = this.vectors.get(worst);
+                  const currentVec = this.vectors.get(id);
+                  if (!worstVec || !currentVec) return worst;
+                  
+                  const worstSim = this.cosineSimilarity(queryVector, worstVec);
+                  const currentSim = this.cosineSimilarity(queryVector, currentVec);
+                  return currentSim < worstSim ? id : worst;
+                });
+                w.delete(worstId);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Return sorted results
+    return Array.from(w).map(id => {
+      const vector = this.vectors.get(id);
+      const similarity = vector ? this.cosineSimilarity(queryVector, vector) : 0;
+      return { itemId: id, similarity };
+    }).sort((a, b) => b.similarity - a.similarity);
+  }
+
+  /**
+   * Prune connections for a node to maintain max connections
+   */
+  private pruneConnections(nodeId: string): void {
+    const connections = this.hnswGraph.get(nodeId);
+    if (!connections || connections.size <= this.annConfig.maxConnections) {
+      return;
+    }
+
+    const nodeVector = this.vectors.get(nodeId);
+    if (!nodeVector) {
+      return;
+    }
+
+    // Calculate similarities to all connected nodes
+    const connectionSimilarities = Array.from(connections).map(connId => {
+      const connVector = this.vectors.get(connId);
+      const similarity = connVector ? this.cosineSimilarity(nodeVector, connVector) : 0;
+      return { itemId: connId, similarity };
+    });
+
+    // Keep only the best connections
+    connectionSimilarities.sort((a, b) => b.similarity - a.similarity);
+    const keepConnections = connectionSimilarities
+      .slice(0, this.annConfig.maxConnections)
+      .map(conn => conn.itemId);
+
+    // Remove excess connections
+    for (const connId of connections) {
+      if (!keepConnections.includes(connId)) {
+        connections.delete(connId);
+        // Remove reverse connection
+        this.hnswGraph.get(connId)?.delete(nodeId);
+      }
+    }
   }
 }

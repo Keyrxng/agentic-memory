@@ -315,6 +315,12 @@ export class AgentGraphMemory {
         enableEmbeddings: true
       }
     });
+    
+    // Set storage access for the index manager if using persistent graph
+    if (this.graph instanceof PersistentGraph) {
+      this.indexManager.setStorage(this.graph.getStorage());
+    }
+    
     this.unifiedQueryProcessor = new UnifiedQueryProcessor(this.indexManager);
   }
 
@@ -326,6 +332,46 @@ export class AgentGraphMemory {
 
     if (this.config.memory.persistenceEnabled && this.graph instanceof PersistentGraph) {
       await this.graph.initialize();
+      
+      // Load persisted dual graphs if available
+      const storage = this.graph.getStorage();
+      if (storage) {
+        try {
+          const { graphs: lexicalGraphs } = await storage.loadLexicalGraphs();
+          const { graphs: domainGraphs } = await storage.loadDomainGraphs();
+          const { links: crossLinks } = await storage.loadCrossGraphLinks();
+
+          // Restore dual graphs to memory
+          for (const graph of lexicalGraphs) {
+            this.lexicalGraphs.set(graph.id, graph);
+            await this.indexManager.indexLexicalGraph(graph);
+          }
+          
+          for (const graph of domainGraphs) {
+            this.domainGraphs.set(graph.id, graph);
+            await this.indexManager.indexDomainGraph(graph);
+          }
+          
+          for (const link of crossLinks) {
+            this.crossGraphLinks.set(link.id, link);
+          }
+          
+          if (crossLinks.length > 0) {
+            await this.indexManager.indexCrossGraphLinks(crossLinks);
+          }
+
+          // Update unified query processor with loaded graphs
+          this.unifiedQueryProcessor.updateGraphReferences(
+            this.lexicalGraphs,
+            this.domainGraphs,
+            this.crossGraphLinks
+          );
+          
+          console.log(`Loaded ${lexicalGraphs.length} lexical graphs, ${domainGraphs.length} domain graphs, and ${crossLinks.length} cross-graph links from storage`);
+        } catch (error) {
+          console.warn('Failed to load dual graphs from storage:', error);
+        }
+      }
     }
 
     // Update utility indices with current graph state
@@ -400,6 +446,20 @@ export class AgentGraphMemory {
     // Store cross-graph links
     for (const link of dualGraphResult.crossLinks) {
       this.crossGraphLinks.set(link.id, link);
+    }
+
+    // Persist dual graphs to storage if persistence is enabled
+    if (this.config.memory.persistenceEnabled && this.graph instanceof PersistentGraph) {
+      const storage = this.graph.getStorage();
+      if (storage) {
+        try {
+          await storage.storeLexicalGraphs([dualGraphResult.lexicalGraph]);
+          await storage.storeDomainGraphs([dualGraphResult.domainGraph]);
+          await storage.storeCrossGraphLinks(dualGraphResult.crossLinks);
+        } catch (error) {
+          console.warn('Failed to persist dual graphs to storage:', error);
+        }
+      }
     }
 
     // Index the dual graphs using the integrated index manager

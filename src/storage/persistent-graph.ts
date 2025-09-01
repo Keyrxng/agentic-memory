@@ -62,6 +62,13 @@ export class PersistentGraph {
   }> = [];
   private isInitialized = false;
 
+  /**
+   * Get the storage instance
+   */
+  getStorage(): GraphStorage | undefined {
+    return this.storage;
+  }
+
   constructor(config: Partial<PersistentGraphConfig> = {}) {
     // Create base graph config
     const baseConfig: Partial<GraphConfig> = {

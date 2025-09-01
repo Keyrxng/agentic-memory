@@ -20,6 +20,7 @@ import type {
   DualGraphQuery,
   DualGraphQueryResult
 } from '../core/types.js';
+import type { GraphStorage } from '../storage/types.js';
 import type { GraphPattern } from './pattern-index.js';
 import type { IndexingConfig, IndexManager, IndexingStats } from '../indexing/types.js';
 
@@ -76,6 +77,9 @@ export class DualGraphIndexManager implements IndexManager {
   private clusteringEngine: ClusteringEngine;
   private queryProcessor: QueryProcessor;
   private entityResolver: EntityResolver;
+  
+  // Storage access for node retrieval
+  private storage?: GraphStorage;
 
   // Dual graph storage references
   private lexicalGraphs: Map<string, LexicalGraph> = new Map();
@@ -84,6 +88,7 @@ export class DualGraphIndexManager implements IndexManager {
 
   // Clustering results
   private clusters: Map<string, MemoryCluster> = new Map();
+
 
   private config: DualGraphIndexingConfig;
 
@@ -129,6 +134,13 @@ export class DualGraphIndexManager implements IndexManager {
     this.clusteringEngine = new ClusteringEngine();
     this.queryProcessor = new QueryProcessor();
     this.entityResolver = new EntityResolver();
+  }
+
+  /**
+   * Set storage instance for node retrieval
+   */
+  setStorage(storage: GraphStorage): void {
+    this.storage = storage;
   }
 
   /**
@@ -459,17 +471,48 @@ export class DualGraphIndexManager implements IndexManager {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
 
-    // Get nodes from storage (this would need to be implemented in the storage layer)
-    for (const nodeId of nodeIds) {
-      // TODO: Implement node retrieval from storage
-      // For now, we'll create placeholder nodes
-      nodes.push({
-        id: nodeId,
-        type: 'unknown', // Would be retrieved from storage
-        properties: {},
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
+    // Get nodes from storage
+    if (this.storage) {
+      try {
+        // Load nodes from storage using the node IDs we found
+        const nodeIdArray = Array.from(nodeIds);
+        const { nodes: storageNodes } = await this.storage.loadNodes({
+          limit: nodeIdArray.length,
+          nodeTypes: query.nodeTypes
+        });
+
+        // Filter to only include the nodes we're looking for
+        const nodeMap = new Map(storageNodes.map(node => [node.id, node]));
+        for (const nodeId of nodeIdArray) {
+          const node = nodeMap.get(nodeId);
+          if (node) {
+            nodes.push(node);
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load nodes from storage:', error);
+        // Fallback to placeholder nodes if storage fails
+        for (const nodeId of nodeIds) {
+          nodes.push({
+            id: nodeId,
+            type: 'unknown',
+            properties: {},
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
+        }
+      }
+    } else {
+      // No storage available, create placeholder nodes
+      for (const nodeId of nodeIds) {
+        nodes.push({
+          id: nodeId,
+          type: 'unknown',
+          properties: {},
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+      }
     }
 
     // Apply limit if specified

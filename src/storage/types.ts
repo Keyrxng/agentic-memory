@@ -18,7 +18,7 @@
  * - Progressive loading: https://blog.tomsawyer.com/json-graph-visualization-techniques
  */
 
-import type { GraphNode, GraphEdge, GraphConfig } from '../core/types.js';
+import type { GraphNode, GraphEdge, GraphConfig, LexicalGraph, DomainGraph, CrossGraphLink } from '../core/types.js';
 
 /**
  * Storage operation result with metadata
@@ -151,6 +151,48 @@ export interface GraphStorage {
    * Clean up old backups
    */
   cleanupBackups(): Promise<StorageResult>;
+
+  /**
+   * Store lexical graphs to persistent storage
+   */
+  storeLexicalGraphs(graphs: LexicalGraph[]): Promise<StorageResult>;
+
+  /**
+   * Store domain graphs to persistent storage
+   */
+  storeDomainGraphs(graphs: DomainGraph[]): Promise<StorageResult>;
+
+  /**
+   * Store cross-graph links to persistent storage
+   */
+  storeCrossGraphLinks(links: CrossGraphLink[]): Promise<StorageResult>;
+
+  /**
+   * Load lexical graphs from persistent storage
+   */
+  loadLexicalGraphs(options?: {
+    limit?: number;
+    offset?: number;
+    since?: Date;
+  }): Promise<{ graphs: LexicalGraph[]; hasMore: boolean }>;
+
+  /**
+   * Load domain graphs from persistent storage
+   */
+  loadDomainGraphs(options?: {
+    limit?: number;
+    offset?: number;
+    since?: Date;
+  }): Promise<{ graphs: DomainGraph[]; hasMore: boolean }>;
+
+  /**
+   * Load cross-graph links from persistent storage
+   */
+  loadCrossGraphLinks(options?: {
+    limit?: number;
+    offset?: number;
+    since?: Date;
+  }): Promise<{ links: CrossGraphLink[]; hasMore: boolean }>;
 
   /**
    * Close storage connections and cleanup
