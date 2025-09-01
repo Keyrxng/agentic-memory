@@ -182,6 +182,9 @@ export class AgentGraphMemory {
   private domainGraphs: Map<string, DomainGraph> = new Map();
   private crossGraphLinks: Map<string, CrossGraphLink> = new Map();
 
+  // Clustering storage
+  private clusters: Map<string, MemoryCluster> = new Map();
+
   constructor(config: Partial<AgentMemoryConfig> = {}) {
     this.config = {
       graph: config.graph || {},
@@ -917,5 +920,119 @@ export class AgentGraphMemory {
       edges: Array.from(edges),
       paths
     };
+  }
+
+  /**
+   * Create semantic clusters from memory nodes
+   */
+  async createClusters(config: ClusteringConfig): Promise<MemoryCluster[]> {
+    await this.ensureInitialized();
+
+    if (!config.enabled) {
+      return [];
+    }
+
+    console.log(`🔍 Creating semantic clusters with ${config.clusteringAlgorithm} algorithm...`);
+
+    // Get all nodes with embeddings for clustering
+    const allNodes = this.graph.getAllNodes();
+    const nodesWithEmbeddings = allNodes.filter(
+      node => node.embeddings && node.embeddings.length > 0 && VectorUtils.isValid(node.embeddings)
+    );
+
+    if (nodesWithEmbeddings.length < config.minClusterSize) {
+      console.log(`⚠️ Not enough nodes with embeddings for clustering (${nodesWithEmbeddings.length})`);
+      return [];
+    }
+
+    const clusters = await this.clusteringEngine.createClusters(nodesWithEmbeddings, config);
+
+    // Store clusters for later retrieval
+    for (const cluster of clusters) {
+      this.clusters.set(cluster.id, cluster);
+    }
+
+    console.log(`✅ Created ${clusters.length} clusters`);
+    return clusters;
+  }
+
+  /**
+   * Find clusters related to a query embedding
+   */
+  findRelatedClusters(
+    queryEmbedding: Float32Array,
+    clusters: MemoryCluster[],
+    maxResults: number = 5
+  ): MemoryCluster[] {
+    return this.clusteringEngine.findRelatedClusters(queryEmbedding, clusters, maxResults);
+  }
+
+  /**
+   * Get contextual memories based on conversation history
+   */
+  async getContextualMemories(
+    conversationHistory: Array<{ role: string; content: string }>,
+    maxResults: number = 5
+  ): Promise<GraphNode[]> {
+    await this.ensureInitialized();
+
+    if (conversationHistory.length === 0) {
+      return [];
+    }
+
+    // Extract key terms from recent conversation
+    const recentMessages = conversationHistory.slice(-3); // Last 3 messages
+    const conversationText = recentMessages.map(msg => msg.content).join(' ');
+
+    // Simple keyword extraction (could be enhanced with NLP)
+    const keywords = this.extractKeywords(conversationText);
+
+    // Find nodes that match these keywords
+    const allNodes = this.graph.getAllNodes();
+    const matchingNodes: GraphNode[] = [];
+
+    for (const node of allNodes) {
+      if (matchingNodes.length >= maxResults) break;
+
+      const nodeText = Object.values(node.properties).join(' ').toLowerCase();
+      const matchesKeyword = keywords.some(keyword =>
+        nodeText.includes(keyword.toLowerCase())
+      );
+
+      if (matchesKeyword) {
+        matchingNodes.push(node);
+      }
+    }
+
+    return matchingNodes;
+  }
+
+  /**
+   * Extract keywords from text for contextual memory retrieval
+   */
+  private extractKeywords(text: string): string[] {
+    // Simple keyword extraction - split by spaces and filter common words
+    const commonWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'shall']);
+
+    return text
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !commonWords.has(word))
+      .filter((word, index, arr) => arr.indexOf(word) === index) // Remove duplicates
+      .slice(0, 10); // Limit to 10 keywords
+  }
+
+  /**
+   * Get current clusters
+   */
+  getClusters(): MemoryCluster[] {
+    return Array.from(this.clusters.values());
+  }
+
+  /**
+   * Clear clusters
+   */
+  clearClusters(): void {
+    this.clusters.clear();
   }
 }
