@@ -248,3 +248,238 @@ export type GraphConfig = {
     syncInterval: number;
   };
 }
+
+/**
+ * Dual Graph Architecture Types
+ * 
+ * Implements separation of concerns between lexical (textual) and domain (semantic) graphs
+ */
+
+/**
+ * Text chunk for lexical graph processing
+ */
+export interface TextChunk {
+  /** Unique identifier for the chunk */
+  id: string;
+  /** Text content of the chunk */
+  content: string;
+  /** Metadata about the chunk */
+  metadata: {
+    /** Source of the text */
+    source: string;
+    /** When the chunk was created */
+    timestamp: Date;
+    /** Type of text chunk */
+    chunkType: 'sentence' | 'paragraph' | 'section' | 'document';
+    /** Position in the source text */
+    position: number;
+    /** Confidence in chunk quality */
+    confidence: number;
+  };
+  /** Vector embeddings for similarity search */
+  embeddings?: Float32Array;
+}
+
+/**
+ * Lexical relationship between text chunks
+ */
+export interface LexicalRelation {
+  /** Unique identifier for the relationship */
+  id: string;
+  /** Source text chunk ID */
+  source: string;
+  /** Target text chunk ID */
+  target: string;
+  /** Type of lexical relationship */
+  type: 'co_occurrence' | 'n_gram' | 'semantic_similarity' | 'sequential' | 'hierarchical';
+  /** Weight/strength of the relationship */
+  weight: number;
+  /** Additional metadata */
+  metadata: Record<string, any>;
+  /** Creation timestamp */
+  createdAt: Date;
+}
+
+/**
+ * Lexical graph for textual content and retrieval
+ */
+export interface LexicalGraph {
+  /** Unique identifier for the lexical graph */
+  id: string;
+  /** Graph type identifier */
+  type: 'lexical';
+  /** Text chunks in the graph */
+  textChunks: Map<string, TextChunk>;
+  /** Lexical relationships between chunks */
+  lexicalRelations: Map<string, LexicalRelation>;
+  /** Embeddings for similarity search */
+  embeddings: Map<string, Float32Array>;
+  /** Retrieval indices for efficient querying */
+  retrievalIndices: {
+    textIndex: Map<string, Set<string>>;
+    vectorIndex: Map<string, Float32Array>;
+    chunkTypeIndex: Map<string, Set<string>>;
+  };
+  /** Creation timestamp */
+  createdAt: Date;
+  /** Last update timestamp */
+  updatedAt: Date;
+}
+
+/**
+ * Entity hierarchy for domain organization
+ */
+export interface EntityHierarchy {
+  /** Unique identifier for the hierarchy */
+  id: string;
+  /** Root entity ID */
+  rootEntityId: string;
+  /** Parent-child relationships */
+  parentChild: Map<string, string[]>;
+  /** Sibling relationships */
+  siblings: Map<string, string[]>;
+  /** Hierarchy type */
+  type: 'taxonomy' | 'organization' | 'concept' | 'temporal';
+  /** Confidence in hierarchy structure */
+  confidence: number;
+}
+
+/**
+ * Domain graph for semantic relationships and entities
+ */
+export interface DomainGraph {
+  /** Unique identifier for the domain graph */
+  id: string;
+  /** Graph type identifier */
+  type: 'domain';
+  /** Entities in the domain */
+  entities: Map<string, EntityRecord>;
+  /** Semantic relationships between entities */
+  semanticRelations: Map<string, RelationshipRecord>;
+  /** Entity hierarchies and taxonomies */
+  entityHierarchies: Map<string, EntityHierarchy>;
+  /** Domain-specific indices */
+  domainIndices: {
+    entityTypeIndex: Map<string, Set<string>>;
+    relationshipTypeIndex: Map<string, Set<string>>;
+    confidenceIndex: Map<number, Set<string>>;
+  };
+  /** Creation timestamp */
+  createdAt: Date;
+  /** Last update timestamp */
+  updatedAt: Date;
+}
+
+/**
+ * Cross-graph link connecting lexical and domain elements
+ */
+export interface CrossGraphLink {
+  /** Unique identifier for the link */
+  id: string;
+  /** Source graph identifier */
+  sourceGraph: 'lexical' | 'domain';
+  /** Source element ID */
+  sourceId: string;
+  /** Target graph identifier */
+  targetGraph: 'lexical' | 'domain';
+  /** Target element ID */
+  targetId: string;
+  /** Type of cross-graph relationship */
+  type: 'entity_mention' | 'evidence_support' | 'semantic_grounding' | 'temporal_alignment';
+  /** Confidence in the link */
+  confidence: number;
+  /** Additional metadata */
+  metadata: Record<string, any>;
+  /** Creation timestamp */
+  createdAt: Date;
+}
+
+/**
+ * Dual graph result from extraction
+ */
+export interface DualGraphResult {
+  /** Lexical graph for textual content */
+  lexicalGraph: LexicalGraph;
+  /** Domain graph for semantic relationships */
+  domainGraph: DomainGraph;
+  /** Cross-graph links */
+  crossLinks: CrossGraphLink[];
+  /** Extraction metadata */
+  metadata: {
+    processingTime: number;
+    textLength: number;
+    chunksCreated: number;
+    entitiesExtracted: number;
+    relationshipsExtracted: number;
+    crossLinksCreated: number;
+  };
+}
+
+/**
+ * Query for dual graph system
+ */
+export interface DualGraphQuery {
+  /** Lexical query for text retrieval */
+  lexicalQuery?: {
+    textSearch?: string;
+    vectorSearch?: Float32Array;
+    chunkType?: string;
+    source?: string;
+  };
+  /** Domain query for semantic search */
+  domainQuery?: {
+    entityTypes?: string[];
+    relationshipTypes?: string[];
+    entityNames?: string[];
+    confidenceThreshold?: number;
+  };
+  /** Cross-graph query for bridging both graphs */
+  crossGraphQuery?: {
+    linkTypes?: string[];
+    sourceGraph?: 'lexical' | 'domain';
+    targetGraph?: 'lexical' | 'domain';
+  };
+  /** Query options */
+  options?: {
+    limit?: number;
+    includeMetadata?: boolean;
+    sortBy?: 'relevance' | 'confidence' | 'timestamp';
+  };
+}
+
+/**
+ * Result of dual graph query
+ */
+export interface DualGraphQueryResult {
+  /** Lexical results */
+  lexicalResults: {
+    chunks: TextChunk[];
+    relations: LexicalRelation[];
+    relevanceScores: Map<string, number>;
+  };
+  /** Domain results */
+  domainResults: {
+    entities: EntityRecord[];
+    relationships: RelationshipRecord[];
+    hierarchies: EntityHierarchy[];
+    relevanceScores: Map<string, number>;
+  };
+  /** Cross-graph results */
+  crossGraphResults: {
+    links: CrossGraphLink[];
+    relevanceScores: Map<string, number>;
+  };
+  /** Combined relevance ranking */
+  combinedResults: Array<{
+    id: string;
+    type: 'lexical' | 'domain' | 'cross';
+    relevance: number;
+    metadata: any;
+  }>;
+  /** Query metadata */
+  metadata: {
+    queryTime: number;
+    totalResults: number;
+    processingDetails: Record<string, any>;
+  };
+}

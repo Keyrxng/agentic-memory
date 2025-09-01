@@ -14,6 +14,15 @@ export { GraphTraversal } from './core/traversal.js';
 export { DependencyBasedExtractor } from './extraction/extractor.js';
 export { EntityResolver } from './extraction/resolver.js';
 
+// LLM-based extraction
+export { LLMBasedExtractor } from './extraction/llm-extractor.js';
+
+// Dual graph architecture components
+export { LexicalGraphExtractor } from './extraction/lexical-extractor.js';
+export { DomainGraphExtractor } from './extraction/domain-extractor.js';
+export { CrossGraphLinker } from './extraction/cross-graph-linker.js';
+export { DualGraphExtractor } from './extraction/dual-graph-extractor.js';
+
 // Temporal management
 export { TemporalGraph } from './temporal/temporal-graph.js';
 
@@ -32,7 +41,17 @@ export type {
   GraphQuery,
   QueryResult,
   GraphMetrics,
-  GraphConfig
+  GraphConfig,
+  // Dual graph types
+  TextChunk,
+  LexicalRelation,
+  LexicalGraph,
+  EntityHierarchy,
+  DomainGraph,
+  CrossGraphLink,
+  DualGraphResult,
+  DualGraphQuery,
+  DualGraphQueryResult
 } from './core/types.js';
 
 // Extraction types
@@ -47,6 +66,33 @@ export type {
   ResolutionConfig,
   DetailedResolutionResult
 } from './extraction/resolver.js';
+
+// LLM extraction types
+export type {
+  LLMExtractionConfig,
+  LLMExtractionResult
+} from './extraction/llm-extractor.js';
+
+// Dual graph extraction types
+export type {
+  LexicalExtractionConfig,
+  LexicalExtractionResult
+} from './extraction/lexical-extractor.js';
+
+export type {
+  DomainExtractionConfig,
+  DomainExtractionResult
+} from './extraction/domain-extractor.js';
+
+export type {
+  CrossGraphLinkingConfig,
+  CrossGraphLinkingResult
+} from './extraction/cross-graph-linker.js';
+
+export type {
+  DualGraphExtractionConfig,
+  ExtractionProgress
+} from './extraction/dual-graph-extractor.js';
 
 // Temporal types
 export type {

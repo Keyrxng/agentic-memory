@@ -1,22 +1,56 @@
 /**
- * Extraction module exports
+ * Entity and relationship extraction module
  * 
- * This module provides both programmatic and LLM-based approaches
- * for entity and relationship extraction from text.
- * 
- * Choose the approach that best fits your needs:
- * - Programmatic: Fast, deterministic, scalable (94% of LLM performance)
- * - LLM-based: More accurate, context-aware, handles complex structures
+ * Provides both traditional entity extraction and the new dual graph architecture:
+ * - Traditional extractors for backward compatibility
+ * - Dual graph extractors for advanced knowledge representation
  */
 
-// Export the original programmatic extractor
-export { DependencyBasedExtractor, type ExtractionConfig, type ExtractionResult } from './extractor.js';
+// Traditional extractors (backward compatibility)
+export { DependencyBasedExtractor } from './extractor.js';
+export { LLMBasedExtractor } from './llm-extractor.js';
+export { EntityResolver } from './resolver.js';
 
-// Export the new LLM-based extractor
-export { LLMBasedExtractor, type LLMExtractionConfig, type LLMExtractionResult } from './llm-extractor.js';
+// Dual graph architecture components
+export { LexicalGraphExtractor } from './lexical-extractor.js';
+export { DomainGraphExtractor } from './domain-extractor.js';
+export { CrossGraphLinker } from './cross-graph-linker.js';
+export { DualGraphExtractor } from './dual-graph-extractor.js';
 
-// Export example usage
-export { runExamples } from './llm-extractor-example.js';
+// Traditional types
+export type {
+  ExtractionConfig,
+  ExtractionResult,
+  ResolutionResult
+} from './extractor.js';
 
-// Re-export common types
-export type { EntityRecord, RelationshipRecord, DependencyRelation, GraphContext } from '../core/types.js';
+export type {
+  LLMExtractionConfig,
+  LLMExtractionResult
+} from './llm-extractor.js';
+
+export type {
+  ResolutionConfig,
+  DetailedResolutionResult
+} from './resolver.js';
+
+// Dual graph types
+export type {
+  LexicalExtractionConfig,
+  LexicalExtractionResult
+} from './lexical-extractor.js';
+
+export type {
+  DomainExtractionConfig,
+  DomainExtractionResult
+} from './domain-extractor.js';
+
+export type {
+  CrossGraphLinkingConfig,
+  CrossGraphLinkingResult
+} from './cross-graph-linker.js';
+
+export type {
+  DualGraphExtractionConfig,
+  ExtractionProgress
+} from './dual-graph-extractor.js';
