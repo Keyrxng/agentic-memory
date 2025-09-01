@@ -421,6 +421,11 @@ export interface DualGraphResult {
     entitiesExtracted: number;
     relationshipsExtracted: number;
     crossLinksCreated: number;
+    multimodalProcessing?: {
+      contentType: string;
+      processedComponents: number;
+      enrichedTextLength: number;
+    };
   };
 }
 

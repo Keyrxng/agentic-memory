@@ -17,6 +17,7 @@ import type {
 import { LexicalGraphExtractor } from './lexical-extractor.js';
 import { DomainGraphExtractor } from './domain-extractor.js';
 import { CrossGraphLinker } from './cross-graph-linker.js';
+import { MultimodalEmbeddingProcessor, type ContentInput } from '../utils/multimodal-processor.js';
 
 /**
  * Configuration for dual graph extraction
@@ -53,6 +54,7 @@ export interface DualGraphExtractionConfig {
     enableParallelProcessing: boolean;
     enableProgressTracking: boolean;
     enableDetailedLogging: boolean;
+    enableMultimodalProcessing: boolean;
   };
 }
 
@@ -74,6 +76,7 @@ export class DualGraphExtractor {
   private lexicalExtractor: LexicalGraphExtractor;
   private domainExtractor: DomainGraphExtractor;
   private crossGraphLinker: CrossGraphLinker;
+  private multimodalProcessor: MultimodalEmbeddingProcessor;
 
   constructor(config: Partial<DualGraphExtractionConfig> = {}) {
     this.config = {
@@ -107,6 +110,7 @@ export class DualGraphExtractor {
         enableParallelProcessing: config.processing?.enableParallelProcessing ?? false,
         enableProgressTracking: config.processing?.enableProgressTracking ?? true,
         enableDetailedLogging: config.processing?.enableDetailedLogging ?? false,
+        enableMultimodalProcessing: config.processing?.enableMultimodalProcessing ?? false,
         ...config.processing
       }
     };
@@ -115,6 +119,11 @@ export class DualGraphExtractor {
     this.lexicalExtractor = new LexicalGraphExtractor(this.config.lexical);
     this.domainExtractor = new DomainGraphExtractor(this.config.domain);
     this.crossGraphLinker = new CrossGraphLinker(this.config.linking);
+    
+    // Initialize multimodal processor if enabled
+    if (this.config.processing.enableMultimodalProcessing) {
+      this.multimodalProcessor = new MultimodalEmbeddingProcessor();
+    }
   }
 
   /**
@@ -233,6 +242,100 @@ export class DualGraphExtractor {
   }
 
   /**
+   * Extract dual graphs from multimodal content
+   */
+  async extractDualGraphsFromMultimodal(
+    content: ContentInput,
+    context: GraphContext,
+    progressCallback?: (progress: ExtractionProgress) => void
+  ): Promise<DualGraphResult> {
+    if (!this.config.processing.enableMultimodalProcessing || !this.multimodalProcessor) {
+      throw new Error('Multimodal processing is not enabled');
+    }
+
+    const startTime = Date.now();
+    
+    if (this.config.processing.enableDetailedLogging) {
+      console.log('🚀 Starting multimodal dual graph extraction...');
+      console.log(`🎯 Content type: ${content.type}`);
+    }
+
+    // Update progress
+    if (progressCallback) {
+      progressCallback({
+        stage: 'lexical',
+        progress: 0,
+        currentOperation: 'Processing multimodal content...'
+      });
+    }
+
+    // Process multimodal content to extract enriched text
+    const processedResult = await this.multimodalProcessor.processContent(content);
+    
+    // Use the enriched text content for standard dual graph extraction
+    const enrichedText = this.combineMultimodalResults(processedResult);
+    
+    if (progressCallback) {
+      progressCallback({
+        stage: 'lexical',
+        progress: 25,
+        currentOperation: 'Extracting from processed content...'
+      });
+    }
+
+    // Extract dual graphs from the enriched text
+    const result = await this.extractDualGraphs(enrichedText, context, progressCallback);
+    
+    // Enhance the result metadata with multimodal information
+    result.metadata = {
+      ...result.metadata,
+      multimodalProcessing: {
+        contentType: content.type,
+        processedComponents: content.type === 'multimodal' ? content.components.length : 1,
+        enrichedTextLength: enrichedText.length
+      }
+    };
+
+    const processingTime = Date.now() - startTime;
+    
+    if (this.config.processing.enableDetailedLogging) {
+      console.log(`✅ Multimodal dual graph extraction completed in ${processingTime}ms`);
+    }
+
+    return result;
+  }
+
+  /**
+   * Combine multimodal processing results into enriched text
+   */
+  private combineMultimodalResults(processedResult: any): string {
+    let enrichedText = '';
+    
+    // Extract text content
+    if (processedResult.textEmbedding && processedResult.textContent) {
+      enrichedText += processedResult.textContent;
+    }
+    
+    // Add vision-derived information if available
+    if (processedResult.visionEmbedding && processedResult.visionMetadata) {
+      enrichedText += `\n\nImage analysis: `;
+      if (processedResult.visionMetadata.description) {
+        enrichedText += processedResult.visionMetadata.description;
+      }
+      if (processedResult.visionMetadata.detectedObjects) {
+        enrichedText += `\nDetected objects: ${processedResult.visionMetadata.detectedObjects.join(', ')}`;
+      }
+    }
+    
+    // Add multimodal fusion insights
+    if (processedResult.fusedEmbedding && processedResult.insights) {
+      enrichedText += `\n\nMultimodal insights: ${processedResult.insights}`;
+    }
+    
+    return enrichedText;
+  }
+
+  /**
    * Extract dual graphs with parallel processing
    */
   async extractDualGraphsParallel(
@@ -345,6 +448,7 @@ export class DualGraphExtractor {
       parallelEnabled: boolean;
       progressTrackingEnabled: boolean;
       detailedLoggingEnabled: boolean;
+      multimodalEnabled: boolean;
     };
   } {
     return {
@@ -367,7 +471,8 @@ export class DualGraphExtractor {
       processing: {
         parallelEnabled: this.config.processing.enableParallelProcessing,
         progressTrackingEnabled: this.config.processing.enableProgressTracking,
-        detailedLoggingEnabled: this.config.processing.enableDetailedLogging
+        detailedLoggingEnabled: this.config.processing.enableDetailedLogging,
+        multimodalEnabled: this.config.processing.enableMultimodalProcessing
       }
     };
   }
@@ -393,6 +498,15 @@ export class DualGraphExtractor {
     
     if (updates.processing) {
       this.config.processing = { ...this.config.processing, ...updates.processing };
+      
+      // Reinitialize multimodal processor if the setting changed
+      if (updates.processing.enableMultimodalProcessing !== undefined) {
+        if (this.config.processing.enableMultimodalProcessing && !this.multimodalProcessor) {
+          this.multimodalProcessor = new MultimodalEmbeddingProcessor();
+        } else if (!this.config.processing.enableMultimodalProcessing) {
+          this.multimodalProcessor = undefined as any;
+        }
+      }
     }
   }
 

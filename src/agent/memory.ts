@@ -105,6 +105,7 @@ export interface AgentMemoryConfig {
       enableParallelProcessing: boolean;
       enableProgressTracking: boolean;
       enableDetailedLogging: boolean;
+      enableMultimodalProcessing: boolean;
     };
   };
 }
@@ -299,22 +300,6 @@ export class AgentGraphMemory {
         enableEmbeddings: true
       }
     });
-    this.unifiedQueryProcessor = new UnifiedQueryProcessor(this.indexManager);
-
-    // Initialize new integrated components
-    this.indexManager = new DualGraphIndexManager({
-      memory: this.config.memory,
-      clustering: {
-        enabled: true,
-        similarityThreshold: 0.7,
-        maxClusters: 50,
-        minClusterSize: 3
-      },
-      resolution: {
-        fuzzyThreshold: 0.8,
-        enableEmbeddings: true
-      }
-    });
     
     // Set storage access for the index manager if using persistent graph
     if (this.graph instanceof PersistentGraph) {
@@ -461,18 +446,6 @@ export class AgentGraphMemory {
         }
       }
     }
-
-    // Index the dual graphs using the integrated index manager
-    await this.indexManager.indexLexicalGraph(dualGraphResult.lexicalGraph);
-    await this.indexManager.indexDomainGraph(dualGraphResult.domainGraph);
-    await this.indexManager.indexCrossGraphLinks(dualGraphResult.crossLinks);
-
-    // Update unified query processor with new graphs
-    this.unifiedQueryProcessor.updateGraphReferences(
-      this.lexicalGraphs,
-      this.domainGraphs,
-      this.crossGraphLinks
-    );
 
     // Index the dual graphs using the integrated index manager
     await this.indexManager.indexLexicalGraph(dualGraphResult.lexicalGraph);
