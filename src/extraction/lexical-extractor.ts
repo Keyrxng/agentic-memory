@@ -255,11 +255,11 @@ export class LexicalGraphExtractor {
         const embedding = await generateEmbeddings({
           provider: 'ollama',
           model: this.config.embeddingModel || 'qwen3:1.7b',
-          text: chunk.content
+          input: chunk.content
         });
         
-        if (embedding && embedding.length > 0) {
-          embeddings.set(chunk.id, new Float32Array(embedding));
+        if (embedding && embedding.embedding.length > 0) {
+          embeddings.set(chunk.id, new Float32Array(embedding.embedding));
         }
       }
     } catch (error) {
