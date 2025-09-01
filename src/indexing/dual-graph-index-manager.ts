@@ -34,6 +34,7 @@ import { MemoryManager } from '../utils/memory-manager.js';
 import { ClusteringEngine, type MemoryCluster } from '../utils/clustering-engine.js';
 import { QueryProcessor } from '../utils/query-processor.js';
 import { EntityResolver } from '../utils/entity-resolver.js';
+import { DualGraphTemporalManager } from '../temporal/dual-graph-temporal-manager.js';
 
 /**
  * Configuration for dual graph indexing
@@ -89,6 +90,8 @@ export class DualGraphIndexManager implements IndexManager {
   // Clustering results
   private clusters: Map<string, MemoryCluster> = new Map();
 
+  // Temporal tracking manager
+  private temporalManager: DualGraphTemporalManager;
 
   private config: DualGraphIndexingConfig;
 
@@ -134,6 +137,15 @@ export class DualGraphIndexManager implements IndexManager {
     this.clusteringEngine = new ClusteringEngine();
     this.queryProcessor = new QueryProcessor();
     this.entityResolver = new EntityResolver();
+    
+    // Initialize temporal tracking
+    this.temporalManager = new DualGraphTemporalManager({
+      autoInvalidation: true,
+      enableCrossGraphConsistency: true,
+      defaultValidityPeriod: 365 * 24 * 60 * 60 * 1000, // 1 year
+      eventValidityPeriod: 30 * 24 * 60 * 60 * 1000, // 30 days
+      stateValidityPeriod: 90 * 24 * 60 * 60 * 1000 // 90 days
+    });
   }
 
   /**
@@ -171,9 +183,23 @@ export class DualGraphIndexManager implements IndexManager {
       await this.indexEntity(entity);
     }
 
-    // Index relationships
+    // Index relationships with temporal tracking
     for (const [relationId, relation] of graph.semanticRelations) {
       await this.indexRelationship(relation);
+      
+      // Track relationship temporally
+      this.temporalManager.trackRelationship(
+        relationId,
+        relation,
+        'domain',
+        {
+          userId: 'system',
+          sessionId: graph.id,
+          timestamp: new Date(),
+          relevantEntities: [],
+          source: 'domain_graph'
+        }
+      );
     }
 
     // Index hierarchies
@@ -205,6 +231,20 @@ export class DualGraphIndexManager implements IndexManager {
     for (const link of links) {
       this.crossGraphLinks.set(link.id, link);
       await this.indexCrossGraphLink(link);
+      
+      // Track cross-graph link temporally
+      this.temporalManager.trackRelationship(
+        link.id,
+        link,
+        'cross_graph',
+        {
+          userId: 'system',
+          sessionId: `${link.sourceGraph}_${link.targetGraph}`,
+          timestamp: new Date(),
+          relevantEntities: [link.sourceId, link.targetId],
+          source: 'cross_graph_link'
+        }
+      );
     }
   }
 
@@ -743,4 +783,54 @@ export class DualGraphIndexManager implements IndexManager {
     // Remove from memory management
     this.memoryManager.markAccessed(edgeId);
   }
+
+  /**
+   * Query relationships with temporal filtering
+   */
+  queryTemporalRelationships(query: any = {}): any[] {
+    return this.temporalManager.queryRelationships(query);
+  }
+
+  /**
+   * Invalidate a relationship
+   */
+  invalidateRelationship(relationshipId: string, reason: any, timestamp?: Date): boolean {
+    return this.temporalManager.invalidateRelationship(relationshipId, reason, timestamp);
+  }
+
+  /**
+   * Get temporal statistics
+   */
+  getTemporalStats(): any {
+    return this.temporalManager.getStats();
+  }
+
+  /**
+   * Clean up old invalidated relationships
+   */
+  cleanupTemporalData(olderThan?: Date): number {
+    return this.temporalManager.cleanup(olderThan);
+  }
+
+  /**
+   * Stop temporal tracking
+   */
+  stopTemporalTracking(): void {
+    this.temporalManager.stop();
+  }
+
+  /**
+   * Mark an item as accessed for memory management
+   */
+  markAccessed(id: string): void {
+    this.memoryManager.markAccessed(id);
+  }
+
+  /**
+   * Get all clusters
+   */
+  getClusters(): any[] {
+    return Array.from(this.clusters.values());
+  }
+
 }
