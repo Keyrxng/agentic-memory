@@ -224,7 +224,7 @@ export class JSONLGraphStorage implements GraphStorage {
 
     return {
       nodes,
-      hasMore: loaded + skipped < this.getTotalNodeCount()
+      hasMore: loaded + skipped < await this.getTotalNodeCount()
     };
   }
 
@@ -280,7 +280,7 @@ export class JSONLGraphStorage implements GraphStorage {
 
     return {
       edges,
-      hasMore: loaded + skipped < this.getTotalEdgeCount()
+      hasMore: loaded + skipped < await this.getTotalEdgeCount()
     };
   }
 
@@ -669,15 +669,36 @@ export class JSONLGraphStorage implements GraphStorage {
       const brPath = filePath + '.br';
 
       try {
-        const decompressStream = this.config.compressionAlgorithm === 'gzip' ? createGunzip() : createBrotliDecompress();
+        // Use proper stream decompression for gzip
+        const decompressStream = createGunzip();
         const compressedContent = await fs.readFile(gzPath);
-        // Note: In a real implementation, you'd pipe through the decompression stream
-        content = compressedContent.toString();
+        const decompressed = await new Promise<Buffer>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          const bufferStream = require('stream').Readable.from(compressedContent);
+
+          bufferStream
+            .pipe(decompressStream)
+            .on('data', (chunk: Buffer) => chunks.push(chunk))
+            .on('end', () => resolve(Buffer.concat(chunks)))
+            .on('error', reject);
+        });
+        content = decompressed.toString('utf-8');
       } catch {
         try {
+          // Use proper stream decompression for brotli
           const decompressStream = createBrotliDecompress();
           const compressedContent = await fs.readFile(brPath);
-          content = compressedContent.toString();
+          const decompressed = await new Promise<Buffer>((resolve, reject) => {
+            const chunks: Buffer[] = [];
+            const bufferStream = require('stream').Readable.from(compressedContent);
+
+            bufferStream
+              .pipe(decompressStream)
+              .on('data', (chunk: Buffer) => chunks.push(chunk))
+              .on('end', () => resolve(Buffer.concat(chunks)))
+              .on('error', reject);
+          });
+          content = decompressed.toString('utf-8');
         } catch {
           // Fall back to uncompressed
           content = await fs.readFile(filePath, 'utf-8');
@@ -699,14 +720,32 @@ export class JSONLGraphStorage implements GraphStorage {
     }
   }
 
-  private getTotalNodeCount(): number {
-    // This is a rough estimate - in production you'd maintain accurate counts
-    return this.nodeFiles.length * 1000; // Assume ~1000 items per file
+  private async getTotalNodeCount(): Promise<number> {
+    // Count actual items from files
+    let totalCount = 0;
+    for (const filePath of this.nodeFiles) {
+      try {
+        const lines = await this.readLinesFromFile(filePath);
+        totalCount += lines.length;
+      } catch (error) {
+        console.warn(`Failed to count nodes in ${filePath}:`, error);
+      }
+    }
+    return totalCount;
   }
 
-  private getTotalEdgeCount(): number {
-    // This is a rough estimate - in production you'd maintain accurate counts
-    return this.edgeFiles.length * 1000; // Assume ~1000 items per file
+  private async getTotalEdgeCount(): Promise<number> {
+    // Count actual items from files
+    let totalCount = 0;
+    for (const filePath of this.edgeFiles) {
+      try {
+        const lines = await this.readLinesFromFile(filePath);
+        totalCount += lines.length;
+      } catch (error) {
+        console.warn(`Failed to count edges in ${filePath}:`, error);
+      }
+    }
+    return totalCount;
   }
 
   private async writeToWAL(type: 'nodes' | 'edges', items: any[]): Promise<void> {
