@@ -135,19 +135,6 @@ app.get('/api/graph', async (c) => {
   }
 });
 
-/**
- * GET /api/metrics
- * Get memory system metrics
- */
-app.get('/api/metrics', async (c) => {
-  try {
-    const metrics = memory.getMetrics();
-    return c.json(metrics);
-  } catch (error) {
-    console.error('Error fetching metrics:', error);
-    return c.json({ error: 'Failed to fetch metrics' }, 500);
-  }
-});
 
 /**
  * POST /api/memory
@@ -262,19 +249,6 @@ app.get('/api/nodes/:nodeId', async (c) => {
   }
 });
 
-/**
- * DELETE /api/memory/clear
- * Clear all memory (useful for testing)
- */
-app.delete('/api/memory/clear', async (c) => {
-  try {
-    memory.clear();
-    return c.json({ message: 'Memory cleared successfully' });
-  } catch (error) {
-    console.error('Error clearing memory:', error);
-    return c.json({ error: 'Failed to clear memory' }, 500);
-  }
-});
 
 /**
  * POST /api/memory/bulk

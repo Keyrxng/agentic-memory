@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/server/index.ts",
-    "build": "bun run build:types && bun run build:bundle",
+    "build": "rm -rf dist && bun run build:types && bun run build:bundle",
     "build:bundle": "bun build index.ts --outdir ./dist --target node",
     "build:types": "tsc",
     "test": "bun test",

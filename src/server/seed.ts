@@ -68,14 +68,6 @@ export async function seedMemoryFromJSONL(
       console.log(`🌱 Starting memory seeding from: ${fullPath}`);
     }
 
-    // Clear existing memory if requested
-    if (clearExisting) {
-      memory.clear();
-      if (verbose) {
-        console.log(`🧹 Cleared existing memory`);
-      }
-    }
-
     // Read and parse JSONL file
     const fileContent = readFileSync(fullPath, 'utf-8');
     const lines = fileContent.trim().split('\n').filter(line => line.trim());

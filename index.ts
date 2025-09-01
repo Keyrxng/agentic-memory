@@ -16,7 +16,4 @@
  * This is a research and learning project showcasing modern GraphRAG techniques.
  */
 
-import { AgentGraphMemory } from './src/agent/memory.js';
-
-// Export the main class for external usage
-export { AgentGraphMemory };
+export * from "./src/index.js";
