@@ -33,6 +33,19 @@ import type {
   GraphStorage
 } from './types.js';
 import type { LexicalGraph, DomainGraph, CrossGraphLink } from '../core/types.js';
+import { ErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/error-handler.js';
+
+/**
+ * In-memory index structure for fast lookups
+ */
+interface InMemoryIndex {
+  nodesByType: Map<string, Set<string>>; // type -> Set of node IDs
+  nodesByFile: Map<string, Set<string>>; // file -> Set of node IDs
+  edgesByType: Map<string, Set<string>>; // type -> Set of edge IDs
+  edgesByFile: Map<string, Set<string>>; // file -> Set of edge IDs
+  nodeMetadata: Map<string, { file: string; line: number; timestamp: Date }>; // nodeId -> metadata
+  edgeMetadata: Map<string, { file: string; line: number; timestamp: Date }>; // edgeId -> metadata
+}
 
 /**
  * JSONL-based storage implementation
@@ -40,6 +53,7 @@ import type { LexicalGraph, DomainGraph, CrossGraphLink } from '../core/types.js
  * Uses JSON Lines format for efficient storage and streaming of graph data.
  * Each line contains a single JSON object representing either a node or edge.
  * Supports compression and automatic file chunking for large datasets.
+ * Now includes in-memory indexing for fast queries.
  */
 export class JSONLGraphStorage implements GraphStorage {
   private config!: StorageConfig;
@@ -48,6 +62,183 @@ export class JSONLGraphStorage implements GraphStorage {
   private edgeFiles: string[] = [];
   private walFile?: string;
   private writeQueue: Array<{ type: 'node' | 'edge'; data: any }> = [];
+  private index: InMemoryIndex;
+
+  constructor() {
+    this.initializeIndex();
+  }
+
+  /**
+   * Initialize empty index structure
+   */
+  private initializeIndex(): void {
+    this.index = {
+      nodesByType: new Map(),
+      nodesByFile: new Map(),
+      edgesByType: new Map(),
+      edgesByFile: new Map(),
+      nodeMetadata: new Map(),
+      edgeMetadata: new Map()
+    };
+  }
+
+  /**
+   * Rebuild index from existing storage files
+   */
+  private async rebuildIndex(): Promise<void> {
+    console.log('🔄 Rebuilding storage index...');
+    const startTime = Date.now();
+    
+    this.initializeIndex(); // Clear existing index
+
+    // Index node files
+    for (const filePath of this.nodeFiles) {
+      try {
+        const fileNodes = await this.readNodesFromFile(filePath, {});
+        let lineNumber = 0;
+        
+        for (const node of fileNodes) {
+          lineNumber++;
+          
+          // Index by type
+          if (!this.index.nodesByType.has(node.type)) {
+            this.index.nodesByType.set(node.type, new Set());
+          }
+          this.index.nodesByType.get(node.type)!.add(node.id);
+          
+          // Index by file
+          if (!this.index.nodesByFile.has(filePath)) {
+            this.index.nodesByFile.set(filePath, new Set());
+          }
+          this.index.nodesByFile.get(filePath)!.add(node.id);
+          
+          // Store metadata
+          this.index.nodeMetadata.set(node.id, {
+            file: filePath,
+            line: lineNumber,
+            timestamp: new Date(node.updatedAt || node.createdAt)
+          });
+        }
+      } catch (error) {
+        ErrorHandler.handle(
+          ErrorCategory.STORAGE,
+          ErrorSeverity.MEDIUM,
+          `Failed to index node file ${filePath}`,
+          error instanceof Error ? error : new Error(String(error)),
+          { filePath, nodeFiles: this.nodeFiles.length },
+          'Check file permissions and format validity'
+        );
+      }
+    }
+
+    // Index edge files
+    for (const filePath of this.edgeFiles) {
+      try {
+        const fileEdges = await this.readEdgesFromFile(filePath, {});
+        let lineNumber = 0;
+        
+        for (const edge of fileEdges) {
+          lineNumber++;
+          
+          // Index by type
+          if (!this.index.edgesByType.has(edge.type)) {
+            this.index.edgesByType.set(edge.type, new Set());
+          }
+          this.index.edgesByType.get(edge.type)!.add(edge.id);
+          
+          // Index by file
+          if (!this.index.edgesByFile.has(filePath)) {
+            this.index.edgesByFile.set(filePath, new Set());
+          }
+          this.index.edgesByFile.get(filePath)!.add(edge.id);
+          
+          // Store metadata
+          this.index.edgeMetadata.set(edge.id, {
+            file: filePath,
+            line: lineNumber,
+            timestamp: new Date(edge.updatedAt || edge.createdAt)
+          });
+        }
+      } catch (error) {
+        ErrorHandler.handle(
+          ErrorCategory.STORAGE,
+          ErrorSeverity.MEDIUM,
+          `Failed to index edge file ${filePath}`,
+          error instanceof Error ? error : new Error(String(error)),
+          { filePath, edgeFiles: this.edgeFiles.length },
+          'Check file permissions and format validity'
+        );
+      }
+    }
+
+    const processingTime = Date.now() - startTime;
+    const totalNodes = this.index.nodeMetadata.size;
+    const totalEdges = this.index.edgeMetadata.size;
+    
+    console.log(`✅ Index rebuilt: ${totalNodes} nodes, ${totalEdges} edges in ${processingTime}ms`);
+  }
+
+  /**
+   * Update index with new nodes
+   */
+  private updateIndexWithNodes(nodes: GraphNode[], filePath: string): void {
+    const currentLineCount = this.index.nodesByFile.get(filePath)?.size || 0;
+    
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const lineNumber = currentLineCount + i + 1;
+      
+      // Index by type
+      if (!this.index.nodesByType.has(node.type)) {
+        this.index.nodesByType.set(node.type, new Set());
+      }
+      this.index.nodesByType.get(node.type)!.add(node.id);
+      
+      // Index by file
+      if (!this.index.nodesByFile.has(filePath)) {
+        this.index.nodesByFile.set(filePath, new Set());
+      }
+      this.index.nodesByFile.get(filePath)!.add(node.id);
+      
+      // Store metadata
+      this.index.nodeMetadata.set(node.id, {
+        file: filePath,
+        line: lineNumber,
+        timestamp: new Date(node.updatedAt || node.createdAt)
+      });
+    }
+  }
+
+  /**
+   * Update index with new edges
+   */
+  private updateIndexWithEdges(edges: GraphEdge[], filePath: string): void {
+    const currentLineCount = this.index.edgesByFile.get(filePath)?.size || 0;
+    
+    for (let i = 0; i < edges.length; i++) {
+      const edge = edges[i];
+      const lineNumber = currentLineCount + i + 1;
+      
+      // Index by type
+      if (!this.index.edgesByType.has(edge.type)) {
+        this.index.edgesByType.set(edge.type, new Set());
+      }
+      this.index.edgesByType.get(edge.type)!.add(edge.id);
+      
+      // Index by file
+      if (!this.index.edgesByFile.has(filePath)) {
+        this.index.edgesByFile.set(filePath, new Set());
+      }
+      this.index.edgesByFile.get(filePath)!.add(edge.id);
+      
+      // Store metadata
+      this.index.edgeMetadata.set(edge.id, {
+        file: filePath,
+        line: lineNumber,
+        timestamp: new Date(edge.updatedAt || edge.createdAt)
+      });
+    }
+  }
 
   /**
    * Initialize the storage system
@@ -73,6 +264,9 @@ export class JSONLGraphStorage implements GraphStorage {
 
       // Scan existing files
       await this.scanExistingFiles();
+
+      // Rebuild index from existing files
+      await this.rebuildIndex();
 
       this.initialized = true;
 
@@ -111,6 +305,9 @@ export class JSONLGraphStorage implements GraphStorage {
 
       await this.writeLinesToFile(filePath, lines);
       this.nodeFiles.push(filePath);
+
+      // Update index with new nodes
+      this.updateIndexWithNodes(nodes, filePath);
 
       // Write to WAL if enabled
       if (this.walFile) {
@@ -153,6 +350,9 @@ export class JSONLGraphStorage implements GraphStorage {
       await this.writeLinesToFile(filePath, lines);
       this.edgeFiles.push(filePath);
 
+      // Update index with new edges
+      this.updateIndexWithEdges(edges, filePath);
+
       // Write to WAL if enabled
       if (this.walFile) {
         await this.writeToWAL('edges', edges);
@@ -187,10 +387,21 @@ export class JSONLGraphStorage implements GraphStorage {
     }
 
     const nodes: GraphNode[] = [];
-    let loaded = 0;
-    let skipped = 0;
     const limit = options.limit || Infinity;
     const offset = options.offset || 0;
+
+    // Use index for optimized querying when filtering by node types
+    if (options.nodeTypes && options.nodeTypes.length > 0) {
+      return this.loadNodesByTypeOptimized(
+        { nodeTypes: options.nodeTypes, since: options.since },
+        limit,
+        offset
+      );
+    }
+
+    // Fall back to sequential scan for complex queries
+    let loaded = 0;
+    let skipped = 0;
 
     for (const filePath of this.nodeFiles) {
       if (nodes.length >= limit) break;
@@ -206,11 +417,7 @@ export class JSONLGraphStorage implements GraphStorage {
 
           if (nodes.length >= limit) break;
 
-          // Apply filters
-          if (options.nodeTypes && !options.nodeTypes.includes(node.type)) {
-            continue;
-          }
-
+          // Apply date filter
           if (options.since && node.updatedAt < options.since) {
             continue;
           }
@@ -219,13 +426,99 @@ export class JSONLGraphStorage implements GraphStorage {
           loaded++;
         }
       } catch (error) {
-        console.warn(`Failed to read nodes from ${filePath}:`, error);
+        ErrorHandler.handle(
+          ErrorCategory.STORAGE,
+          ErrorSeverity.MEDIUM,
+          `Failed to read nodes from ${filePath}`,
+          error instanceof Error ? error : new Error(String(error)),
+          { filePath, operation: 'loadNodes' },
+          'Check file format and permissions'
+        );
       }
     }
 
     return {
       nodes,
       hasMore: loaded + skipped < await this.getTotalNodeCount()
+    };
+  }
+
+  /**
+   * Optimized loading using index for type-based queries
+   */
+  private async loadNodesByTypeOptimized(
+    options: { nodeTypes: string[]; since?: Date },
+    limit: number,
+    offset: number
+  ): Promise<{ nodes: GraphNode[]; hasMore: boolean }> {
+    const nodes: GraphNode[] = [];
+    let loaded = 0;
+    let skipped = 0;
+
+    // Get candidate node IDs from index
+    const candidateNodeIds = new Set<string>();
+    for (const nodeType of options.nodeTypes) {
+      const typeNodes = this.index.nodesByType.get(nodeType);
+      if (typeNodes) {
+        typeNodes.forEach(id => candidateNodeIds.add(id));
+      }
+    }
+
+    // Sort candidates by timestamp (most recent first) if we have the metadata
+    const sortedCandidates = Array.from(candidateNodeIds)
+      .map(id => ({
+        id,
+        metadata: this.index.nodeMetadata.get(id)!
+      }))
+      .sort((a, b) => b.metadata.timestamp.getTime() - a.metadata.timestamp.getTime());
+
+    // Load only the files that contain our candidate nodes
+    const filesToLoad = new Set(sortedCandidates.map(c => c.metadata.file));
+    const nodeCache = new Map<string, GraphNode>();
+
+    // Load files into cache
+    for (const filePath of filesToLoad) {
+      if (nodes.length >= limit && skipped >= offset) break;
+      
+      try {
+        const fileNodes = await this.readNodesFromFile(filePath, {});
+        fileNodes.forEach(node => nodeCache.set(node.id, node));
+      } catch (error) {
+        ErrorHandler.handle(
+          ErrorCategory.STORAGE,
+          ErrorSeverity.MEDIUM,
+          `Failed to read nodes from ${filePath}`,
+          error instanceof Error ? error : new Error(String(error)),
+          { filePath, operation: 'loadNodes' },
+          'Check file format and permissions'
+        );
+      }
+    }
+
+    // Process candidates in order
+    for (const candidate of sortedCandidates) {
+      if (nodes.length >= limit) break;
+
+      const node = nodeCache.get(candidate.id);
+      if (!node) continue;
+
+      // Apply date filter
+      if (options.since && node.updatedAt < options.since) {
+        continue;
+      }
+
+      if (skipped < offset) {
+        skipped++;
+        continue;
+      }
+
+      nodes.push(node);
+      loaded++;
+    }
+
+    return {
+      nodes,
+      hasMore: loaded + skipped < candidateNodeIds.size
     };
   }
 
@@ -275,7 +568,14 @@ export class JSONLGraphStorage implements GraphStorage {
           loaded++;
         }
       } catch (error) {
-        console.warn(`Failed to read edges from ${filePath}:`, error);
+        ErrorHandler.handle(
+          ErrorCategory.STORAGE,
+          ErrorSeverity.MEDIUM,
+          `Failed to read edges from ${filePath}`,
+          error instanceof Error ? error : new Error(String(error)),
+          { filePath, operation: 'loadEdges' },
+          'Check file format and permissions'
+        );
       }
     }
 
